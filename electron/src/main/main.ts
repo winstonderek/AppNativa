@@ -7,6 +7,7 @@ import {
 } from 'electron';
 import { APP_ID, APP_NAME, PROTOCOL_SCHEME } from '../shared/constants';
 import { applyLaunchAtStartupSetting } from './auto-start';
+import { setupCallLayoutHandlers } from './call-layout';
 import { consumePendingDeepLinks, handleDeepLink, setupDeepLinkHandlers } from './deep-links';
 import { setupSessionDownloads } from './downloads';
 import { logger } from './logger';
@@ -36,9 +37,15 @@ if (!gotSingleInstanceLock) {
     app.setName(APP_NAME);
     app.setAppUserModelId(APP_ID);
 
+    if (process.platform === 'darwin') {
+      // Keep the native title bar (traffic lights area) in light/white chrome on macOS.
+      nativeTheme.themeSource = 'light';
+    }
+
     setupDeepLinkHandlers();
     setupPermissions();
     setupSessionDownloads();
+    setupCallLayoutHandlers();
     applyLaunchAtStartupSetting();
     buildApplicationMenu();
 

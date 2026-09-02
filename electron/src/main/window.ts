@@ -11,21 +11,61 @@ import path from 'node:path';
 import {
   APP_NAME,
   APP_URL,
+  ARG_PREFIXES,
   DEFAULT_WINDOW_HEIGHT,
   DEFAULT_WINDOW_WIDTH,
   MIN_WINDOW_HEIGHT,
   MIN_WINDOW_WIDTH,
+  type WindowRole,
 } from '../shared/constants';
 import { setupDownloads } from './downloads';
 import { setupExternalLinkHandlers, setupNavigationHandlers } from './external-links';
 import { setupContextMenu } from './context-menu';
 import { logger, isDevelopment } from './logger';
 
+type WindowState = ReturnType<typeof windowStateKeeper>;
+
 let mainWindow: BrowserWindow | null = null;
+let mainWindowState: WindowState | null = null;
 const popupWindows = new Set<BrowserWindow>();
+const windowRoles = new WeakMap<BrowserWindow, WindowRole>();
+
+const MACOS_WINDOW_CHROME: Partial<Electron.BrowserWindowConstructorOptions> = {
+  backgroundColor: '#ffffff',
+  titleBarStyle: 'default',
+};
+
+function getPlatformWindowOptions(): Partial<Electron.BrowserWindowConstructorOptions> {
+  if (process.platform === 'darwin') {
+    return MACOS_WINDOW_CHROME;
+  }
+
+  return {
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1a1a1a' : '#ffffff',
+  };
+}
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow;
+}
+
+/**
+ * Promotes a window to be the one the tray, deep links and `activate` act on.
+ * Used when the workspace window outlives the window that hosted a call.
+ */
+export function setMainWindow(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  mainWindow = window;
+  windowRoles.set(window, 'main');
+}
+
+/** The shared window-state keeper, so callers can pause/transfer bounds persistence. */
+export function getMainWindowState(): WindowState | null {
+  return mainWindowState;
+}
+
+export function getWindowRole(window: BrowserWindow): WindowRole {
+  return windowRoles.get(window) ?? 'main';
 }
 
 export function getPopupWindowOptions(): Electron.BrowserWindowConstructorOptions {
@@ -36,12 +76,15 @@ export function getPopupWindowOptions(): Electron.BrowserWindowConstructorOption
     minHeight: 480,
     autoHideMenuBar: true,
     title: APP_NAME,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1a1a1a' : '#ffffff',
-    webPreferences: getWebPreferences(),
+    ...getPlatformWindowOptions(),
+    webPreferences: getWebPreferences('popup'),
   };
 }
 
-function getWebPreferences(): Electron.WebPreferences {
+function getWebPreferences(
+  role: WindowRole,
+  callsSuppressed = false,
+): Electron.WebPreferences {
   return {
     preload: path.join(__dirname, '..', 'preload', 'preload.js'),
     contextIsolation: true,
@@ -52,6 +95,11 @@ function getWebPreferences(): Electron.WebPreferences {
     devTools: isDevelopment(),
     zoomFactor: 1,
     enableBlinkFeatures: '',
+    additionalArguments: [
+      `${ARG_PREFIXES.windowRole}${role}`,
+      `${ARG_PREFIXES.appVersion}${app.getVersion()}`,
+      `${ARG_PREFIXES.callsSuppressed}${callsSuppressed}`,
+    ],
   };
 }
 
@@ -79,60 +127,102 @@ function showErrorPage(
     .catch((err) => logger.error('Failed to load error page', err));
 }
 
-export function createMainWindow(initialUrl?: string): BrowserWindow {
-  const mainWindowState = windowStateKeeper({
-    defaultWidth: DEFAULT_WINDOW_WIDTH,
-    defaultHeight: DEFAULT_WINDOW_HEIGHT,
-    file: 'main-window-state.json',
-  });
+export interface AppWindowInit {
+  initialUrl?: string;
+  role?: WindowRole;
+  /** Explicit bounds. When omitted, the persisted window state is used instead. */
+  bounds?: Electron.Rectangle;
+  minWidth?: number;
+  callsSuppressed?: boolean;
+  /** Whether this window becomes the target of the tray and deep links. */
+  becomeMain?: boolean;
+}
 
-  mainWindow = new BrowserWindow({
-    x: mainWindowState.x,
-    y: mainWindowState.y,
-    width: mainWindowState.width,
-    height: mainWindowState.height,
-    minWidth: MIN_WINDOW_WIDTH,
+/**
+ * Creates a full application window (main or workspace) with the complete
+ * navigation, download, context-menu and error handling setup.
+ */
+export function createAppWindow(init: AppWindowInit = {}): BrowserWindow {
+  const role = init.role ?? 'main';
+  const becomeMain = init.becomeMain ?? role === 'main';
+  const usePersistedBounds = !init.bounds;
+
+  if (usePersistedBounds && !mainWindowState) {
+    mainWindowState = windowStateKeeper({
+      defaultWidth: DEFAULT_WINDOW_WIDTH,
+      defaultHeight: DEFAULT_WINDOW_HEIGHT,
+      file: 'main-window-state.json',
+    });
+  }
+
+  const bounds =
+    init.bounds ??
+    ({
+      x: mainWindowState?.x,
+      y: mainWindowState?.y,
+      width: mainWindowState?.width ?? DEFAULT_WINDOW_WIDTH,
+      height: mainWindowState?.height ?? DEFAULT_WINDOW_HEIGHT,
+    } as Electron.Rectangle);
+
+  const window = new BrowserWindow({
+    ...bounds,
+    minWidth: init.minWidth ?? MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     title: APP_NAME,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1a1a1a' : '#ffffff',
+    ...getPlatformWindowOptions(),
     autoHideMenuBar: false,
-    webPreferences: getWebPreferences(),
+    webPreferences: getWebPreferences(role, init.callsSuppressed ?? false),
   });
 
-  mainWindowState.manage(mainWindow);
+  windowRoles.set(window, role);
 
-  setupNavigationHandlers(mainWindow.webContents);
-  setupExternalLinkHandlers(mainWindow);
-  setupDownloads(mainWindow.webContents);
-  setupContextMenu(mainWindow.webContents);
-  setupKeyboardShortcuts(mainWindow);
+  if (becomeMain) {
+    mainWindow = window;
+  }
 
-  mainWindow.webContents.setVisualZoomLevelLimits(1, 3);
+  if (usePersistedBounds) {
+    mainWindowState?.manage(window);
+  }
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
+  setupNavigationHandlers(window.webContents);
+  setupExternalLinkHandlers(window);
+  setupDownloads(window.webContents);
+  setupContextMenu(window.webContents);
+  setupKeyboardShortcuts(window);
+
+  window.webContents.setVisualZoomLevelLimits(1, 3);
+
+  window.once('ready-to-show', () => {
+    if (window.isDestroyed()) return;
+    window.show();
     if (isDevelopment()) {
-      mainWindow?.webContents.openDevTools({ mode: 'detach' });
+      window.webContents.openDevTools({ mode: 'detach' });
     }
   });
 
-  mainWindow.webContents.on('did-finish-load', () => {
-    const url = mainWindow?.webContents.getURL() ?? '';
+  window.webContents.on('did-finish-load', () => {
+    if (window.isDestroyed()) return;
+    const url = window.webContents.getURL();
     if (url.includes('loading.html') || url.includes('error.html')) return;
     logger.debug(`Page loaded: ${url}`);
   });
 
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+  window.on('page-title-updated', (event) => {
+    event.preventDefault();
+    window.setTitle(APP_NAME);
+  });
+
+  window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame) return;
     if (errorCode === -3) return; // ERR_ABORTED — navigation cancelled
     logger.error(`Load failed: ${errorCode} ${errorDescription} — ${validatedURL}`);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      showErrorPage(mainWindow.webContents, errorCode, errorDescription, validatedURL);
+    if (!window.isDestroyed()) {
+      showErrorPage(window.webContents, errorCode, errorDescription, validatedURL);
     }
   });
 
-  mainWindow.webContents.on('certificate-error', (event, _url, _error, _certificate, callback) => {
+  window.webContents.on('certificate-error', (event, _url, _error, _certificate, callback) => {
     // Never bypass invalid certificates in production
     if (isDevelopment()) {
       event.preventDefault();
@@ -144,14 +234,19 @@ export function createMainWindow(initialUrl?: string): BrowserWindow {
     }
   });
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  window.on('closed', () => {
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
   });
 
-  const targetUrl = initialUrl ?? APP_URL;
-  loadAppUrl(mainWindow, targetUrl);
+  loadAppUrl(window, init.initialUrl ?? APP_URL);
 
-  return mainWindow;
+  return window;
+}
+
+export function createMainWindow(initialUrl?: string): BrowserWindow {
+  return createAppWindow({ initialUrl, role: 'main' });
 }
 
 export function loadAppUrl(window: BrowserWindow, url: string): void {
@@ -179,6 +274,11 @@ export function createPopupWindow(url: string, parent?: WebContents): BrowserWin
 
     popup.on('closed', () => {
       popupWindows.delete(popup);
+    });
+
+    popup.on('page-title-updated', (event) => {
+      event.preventDefault();
+      popup.setTitle(APP_NAME);
     });
 
     popup.loadURL(url).catch((err) => {

@@ -11,6 +11,27 @@ export const DEFAULT_WINDOW_HEIGHT = 900;
 export const MIN_WINDOW_WIDTH = 800;
 export const MIN_WINDOW_HEIGHT = 600;
 
+/** Half-screen call layout needs a smaller floor than MIN_WINDOW_WIDTH, or setBounds gets clamped. */
+export const MIN_SPLIT_WINDOW_WIDTH = 420;
+
+export type WindowRole = 'main' | 'workspace' | 'popup';
+
+export const IPC_CHANNELS = {
+  /** Renderer → main: media is flowing, split the screen. */
+  callConnected: 'pynn:call-connected',
+  /** Renderer → main: the call is over, tear the split down. */
+  callEnded: 'pynn:call-ended',
+  /** Main → renderer: this window must not render call UI right now. */
+  callsSuppressed: 'pynn:calls-suppressed',
+} as const;
+
+/** Prefixes for webPreferences.additionalArguments, read synchronously by the sandboxed preload. */
+export const ARG_PREFIXES = {
+  windowRole: '--pynn-window-role=',
+  appVersion: '--pynn-app-version=',
+  callsSuppressed: '--pynn-calls-suppressed=',
+} as const;
+
 /** Protocols opened via the system default handler (never executed as shell commands). */
 export const EXTERNAL_PROTOCOLS = new Set([
   'mailto:',
