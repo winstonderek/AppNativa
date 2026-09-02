@@ -1,23 +1,37 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import {
-  APP_NAME,
-  ARG_PREFIXES,
-  IPC_CHANNELS,
-  type WindowRole,
-} from '../shared/constants';
+import type { WindowRole } from '../shared/constants';
+
+/**
+ * Sandboxed preload scripts cannot `require` relative files — Electron replaces
+ * `require` with a polyfill that only resolves a handful of built-in modules.
+ * Any import here that survives compilation aborts the whole script and silently
+ * exposes nothing, so these values are inlined on purpose.
+ *
+ * Keep in sync with APP_NAME, IPC_CHANNELS and ARG_PREFIXES in ../shared/constants.
+ * Type-only imports are erased by tsc and are safe.
+ */
+const APP_NAME = 'Pynn';
+
+const CHANNEL_CALL_CONNECTED = 'pynn:call-connected';
+const CHANNEL_CALL_ENDED = 'pynn:call-ended';
+const CHANNEL_CALLS_SUPPRESSED = 'pynn:calls-suppressed';
+
+const ARG_WINDOW_ROLE = '--pynn-window-role=';
+const ARG_APP_VERSION = '--pynn-app-version=';
+const ARG_CALLS_SUPPRESSED = '--pynn-calls-suppressed=';
 
 function readArg(prefix: string): string | null {
   const match = process.argv.find((arg) => arg.startsWith(prefix));
   return match ? match.slice(prefix.length) : null;
 }
 
-const windowRole = (readArg(ARG_PREFIXES.windowRole) ?? 'main') as WindowRole;
-const appVersion = readArg(ARG_PREFIXES.appVersion) ?? '';
+const windowRole = (readArg(ARG_WINDOW_ROLE) ?? 'main') as WindowRole;
+const appVersion = readArg(ARG_APP_VERSION) ?? '';
 
-let callsSuppressed = readArg(ARG_PREFIXES.callsSuppressed) === 'true';
+let callsSuppressed = readArg(ARG_CALLS_SUPPRESSED) === 'true';
 const suppressionListeners = new Set<(suppressed: boolean) => void>();
 
-ipcRenderer.on(IPC_CHANNELS.callsSuppressed, (_event, suppressed: boolean) => {
+ipcRenderer.on(CHANNEL_CALLS_SUPPRESSED, (_event, suppressed: boolean) => {
   callsSuppressed = Boolean(suppressed);
   for (const listener of suppressionListeners) {
     try {
@@ -50,10 +64,10 @@ contextBridge.exposeInMainWorld('pynnDesktop', {
   },
 
   /** Media is flowing: ask the shell to move this window aside and open a workspace window. */
-  notifyCallConnected: () => ipcRenderer.send(IPC_CHANNELS.callConnected),
+  notifyCallConnected: () => ipcRenderer.send(CHANNEL_CALL_CONNECTED),
 
   /** The call is over: ask the shell to close this window and restore the workspace window. */
-  notifyCallEnded: () => ipcRenderer.send(IPC_CHANNELS.callEnded),
+  notifyCallEnded: () => ipcRenderer.send(CHANNEL_CALL_ENDED),
 });
 
 // Consumed by the web app's isDesktopApp()/getDesktopAppInfo() helpers.
