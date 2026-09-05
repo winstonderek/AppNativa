@@ -12,9 +12,13 @@ import type { WindowRole } from '../shared/constants';
  */
 const APP_NAME = 'Pynn';
 
+const CHANNEL_CALL_OPEN = 'pynn:call-open';
+const CHANNEL_CALL_GET_PENDING = 'pynn:call-get-pending';
 const CHANNEL_CALL_CONNECTED = 'pynn:call-connected';
 const CHANNEL_CALL_ENDED = 'pynn:call-ended';
 const CHANNEL_CALLS_SUPPRESSED = 'pynn:calls-suppressed';
+const CHANNEL_UNREAD_COUNT = 'pynn:unread-count';
+const CHANNEL_SHOW_NOTIFICATION = 'pynn:show-notification';
 
 const ARG_WINDOW_ROLE = '--pynn-window-role=';
 const ARG_APP_VERSION = '--pynn-app-version=';
@@ -63,11 +67,29 @@ contextBridge.exposeInMainWorld('pynnDesktop', {
     };
   },
 
-  /** Media is flowing: ask the shell to move this window aside and open a workspace window. */
+  /**
+   * Ask the shell to open a floating call window on the top quarter of the
+   * display and hand this LiveKit session to it. The current window stays put.
+   */
+  openCallWindow: (session: unknown) => ipcRenderer.invoke(CHANNEL_CALL_OPEN, session),
+
+  /** Call window only: consume the session the workspace window just handed over. */
+  getPendingCall: () => ipcRenderer.invoke(CHANNEL_CALL_GET_PENDING),
+
+  /** Legacy in-place signal. Newer builds use openCallWindow instead. */
   notifyCallConnected: () => ipcRenderer.send(CHANNEL_CALL_CONNECTED),
 
-  /** The call is over: ask the shell to close this window and restore the workspace window. */
+  /** The call is over: close the floating call window. */
   notifyCallEnded: () => ipcRenderer.send(CHANNEL_CALL_ENDED),
+
+  /** Unread in-app notification count for the dock / taskbar badge. */
+  setUnreadCount: (count: number) => ipcRenderer.send(CHANNEL_UNREAD_COUNT, count),
+
+  /**
+   * Ask the shell to show a native OS notification. Main skips it when a
+   * Pynn window is focused.
+   */
+  showNotification: (payload: unknown) => ipcRenderer.send(CHANNEL_SHOW_NOTIFICATION, payload),
 });
 
 // Consumed by the web app's isDesktopApp()/getDesktopAppInfo() helpers.

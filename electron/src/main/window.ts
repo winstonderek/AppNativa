@@ -133,6 +133,8 @@ export interface AppWindowInit {
   /** Explicit bounds. When omitted, the persisted window state is used instead. */
   bounds?: Electron.Rectangle;
   minWidth?: number;
+  minHeight?: number;
+  alwaysOnTop?: boolean;
   callsSuppressed?: boolean;
   /** Whether this window becomes the target of the tray and deep links. */
   becomeMain?: boolean;
@@ -167,7 +169,8 @@ export function createAppWindow(init: AppWindowInit = {}): BrowserWindow {
   const window = new BrowserWindow({
     ...bounds,
     minWidth: init.minWidth ?? MIN_WINDOW_WIDTH,
-    minHeight: MIN_WINDOW_HEIGHT,
+    minHeight: init.minHeight ?? MIN_WINDOW_HEIGHT,
+    alwaysOnTop: init.alwaysOnTop ?? false,
     show: false,
     title: APP_NAME,
     ...getPlatformWindowOptions(),

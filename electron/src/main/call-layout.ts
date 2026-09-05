@@ -2,31 +2,36 @@ import { BrowserWindow, WebContents, ipcMain, screen } from 'electron';
 import {
   APP_URL,
   IPC_CHANNELS,
-  MIN_SPLIT_WINDOW_WIDTH,
-  MIN_WINDOW_HEIGHT,
-  MIN_WINDOW_WIDTH,
+  MIN_CALL_WINDOW_HEIGHT,
+  MIN_CALL_WINDOW_WIDTH,
 } from '../shared/constants';
 import { isPrimaryHost } from '../shared/url-utils';
 import { logger } from './logger';
-import {
-  createAppWindow,
-  getMainWindowState,
-  getWindowRole,
-  setMainWindow,
-} from './window';
+import { createAppWindow, getMainWindow, getWindowRole } from './window';
+
+export interface PendingCallSession {
+  callId: string;
+  callToken: string;
+  roomName: string;
+  type: 'audio' | 'video';
+  role: 'caller' | 'receiver';
+  peerName: string;
+  peerAvatarUrl: string | null;
+  livekitToken: string;
+  serverUrl: string;
+  canPublishVideo: boolean;
+  banner?: string | null;
+}
 
 interface ActiveLayout {
-  /** The window where LiveKit connected. Closed when the call ends. */
+  /** The original window the user was working in. Never resized. */
+  workspaceWindow: BrowserWindow | null;
+  /** Floating window at the top of the display that hosts LiveKit. */
   callWindow: BrowserWindow;
-  /** The window opened alongside it, which survives the call. */
-  workspaceWindow: BrowserWindow;
-  restoreBounds: Electron.Rectangle;
-  wasMaximized: boolean;
-  wasFullScreen: boolean;
 }
 
 let active: ActiveLayout | null = null;
-let entering = false;
+let pendingCall: PendingCallSession | null = null;
 
 function isTrustedSender(contents: WebContents): boolean {
   try {
@@ -41,109 +46,71 @@ function sendSuppression(window: BrowserWindow, suppressed: boolean): void {
   window.webContents.send(IPC_CHANNELS.callsSuppressed, suppressed);
 }
 
-function restoreWindow(
-  window: BrowserWindow,
-  bounds: Electron.Rectangle,
-  maximized: boolean,
-  fullScreen: boolean,
-): void {
-  if (window.isDestroyed()) return;
+function isPendingCallSession(value: unknown): value is PendingCallSession {
+  if (!value || typeof value !== 'object') return false;
+  const session = value as PendingCallSession;
+  return (
+    typeof session.callId === 'string' &&
+    typeof session.callToken === 'string' &&
+    typeof session.roomName === 'string' &&
+    (session.type === 'audio' || session.type === 'video') &&
+    (session.role === 'caller' || session.role === 'receiver') &&
+    typeof session.peerName === 'string' &&
+    typeof session.livekitToken === 'string' &&
+    typeof session.serverUrl === 'string' &&
+    typeof session.canPublishVideo === 'boolean'
+  );
+}
 
-  // Raise the floor back before setting bounds, otherwise the larger minimum wins.
-  window.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT);
-  window.setBounds(bounds);
-
-  if (maximized) window.maximize();
-  if (fullScreen) window.setFullScreen(true);
+function callWindowBounds(fromWindow: BrowserWindow): Electron.Rectangle {
+  const { workArea } = screen.getDisplayMatching(fromWindow.getBounds());
+  const width = Math.max(MIN_CALL_WINDOW_WIDTH, Math.floor(workArea.width / 4));
+  const height = Math.max(MIN_CALL_WINDOW_HEIGHT, Math.floor(workArea.height / 4));
+  return {
+    x: workArea.x + workArea.width - width,
+    y: workArea.y,
+    width,
+    height,
+  };
 }
 
 /**
- * Splits the screen: the window that hosts the call moves to the left half and a
- * fresh workspace window opens on the right so the user can keep working.
+ * Leaves the original window alone and opens a floating call window on the top
+ * quarter of the same display. The LiveKit session is handed to that window.
  */
-function enterCallLayout(callWindow: BrowserWindow): void {
-  if (active || entering) return;
-  if (callWindow.isDestroyed()) return;
+function openCallWindow(workspaceWindow: BrowserWindow, session: PendingCallSession): boolean {
+  if (active) return false;
+  if (workspaceWindow.isDestroyed()) return false;
 
-  entering = true;
+  pendingCall = session;
 
-  const restoreBounds = callWindow.getNormalBounds();
-  const wasMaximized = callWindow.isMaximized();
-  const wasFullScreen = callWindow.isFullScreen();
+  const bounds = callWindowBounds(workspaceWindow);
+  const callWindow = createAppWindow({
+    role: 'call',
+    initialUrl: APP_URL,
+    bounds,
+    minWidth: Math.min(MIN_CALL_WINDOW_WIDTH, bounds.width),
+    minHeight: Math.min(MIN_CALL_WINDOW_HEIGHT, bounds.height),
+    alwaysOnTop: true,
+    callsSuppressed: false,
+    becomeMain: false,
+  });
 
-  // Do not persist the temporary half-screen geometry as the user's window size.
-  getMainWindowState()?.unmanage();
-
-  const applySplit = () => {
-    entering = false;
-    if (callWindow.isDestroyed()) return;
-
-    const { workArea } = screen.getDisplayMatching(restoreBounds);
-    const leftWidth = Math.floor(workArea.width / 2);
-    const rightWidth = workArea.width - leftWidth;
-    const minHeight = Math.min(MIN_WINDOW_HEIGHT, workArea.height);
-
-    if (callWindow.isMaximized()) callWindow.unmaximize();
-    callWindow.setMinimumSize(Math.min(MIN_SPLIT_WINDOW_WIDTH, leftWidth), minHeight);
-    callWindow.setBounds({
-      x: workArea.x,
-      y: workArea.y,
-      width: leftWidth,
-      height: workArea.height,
-    });
-
-    const workspaceWindow = createAppWindow({
-      role: 'workspace',
-      initialUrl: APP_URL,
-      bounds: {
-        x: workArea.x + leftWidth,
-        y: workArea.y,
-        width: rightWidth,
-        height: workArea.height,
-      },
-      minWidth: Math.min(MIN_SPLIT_WINDOW_WIDTH, rightWidth),
-      callsSuppressed: true,
-      becomeMain: true,
-    });
-
-    active = {
-      callWindow,
-      workspaceWindow,
-      restoreBounds,
-      wasMaximized,
-      wasFullScreen,
-    };
-
-    watchLayout(active);
-    logger.info('Call layout entered — call window left, workspace window right');
-  };
-
-  if (wasFullScreen) {
-    // Bounds changes are ignored while a window is full screen, and on macOS the
-    // transition is animated, so wait for it to finish.
-    callWindow.once('leave-full-screen', applySplit);
-    callWindow.once('closed', () => {
-      entering = false;
-    });
-    callWindow.setFullScreen(false);
-    return;
-  }
-
-  applySplit();
+  active = { workspaceWindow, callWindow };
+  sendSuppression(workspaceWindow, true);
+  watchLayout(active);
+  logger.info('Call window opened at the top-right quarter of the display');
+  return true;
 }
 
 function watchLayout(layout: ActiveLayout): void {
-  const { callWindow, workspaceWindow } = layout;
+  const { callWindow } = layout;
+  const workspaceWindow = layout.workspaceWindow;
+  if (!workspaceWindow) return;
 
   callWindow.once('closed', () => {
     if (active !== layout) return;
     exitCallLayout('call window closed');
-  });
-
-  // A reload or navigation destroys the call state without an IPC hang-up.
-  callWindow.webContents.once('did-navigate', () => {
-    if (active !== layout) return;
-    exitCallLayout('call window navigated away');
   });
 
   callWindow.webContents.once('render-process-gone', () => {
@@ -151,20 +118,12 @@ function watchLayout(layout: ActiveLayout): void {
     exitCallLayout('call renderer gone');
   });
 
-  // The user may close the workspace window while still on the call; in that case
-  // the call window takes over again instead of being closed later.
   workspaceWindow.once('closed', () => {
     if (active !== layout) return;
-    active = null;
-
-    if (callWindow.isDestroyed()) return;
-    restoreWindow(callWindow, layout.restoreBounds, layout.wasMaximized, false);
-    setMainWindow(callWindow);
-    getMainWindowState()?.manage(callWindow);
-    logger.info('Workspace window closed during call — call window promoted back');
+    layout.workspaceWindow = null;
+    logger.info('Workspace window closed during call — call window stays open');
   });
 
-  // Re-assert suppression across reloads, in both directions.
   workspaceWindow.webContents.on('did-finish-load', () => {
     if (workspaceWindow.isDestroyed()) return;
     sendSuppression(workspaceWindow, active?.workspaceWindow === workspaceWindow);
@@ -175,38 +134,54 @@ function exitCallLayout(reason: string): void {
   const layout = active;
   if (!layout) return;
   active = null;
+  pendingCall = null;
 
-  const { callWindow, workspaceWindow, restoreBounds, wasMaximized, wasFullScreen } = layout;
+  const { callWindow, workspaceWindow } = layout;
 
-  if (!workspaceWindow.isDestroyed()) {
-    restoreWindow(workspaceWindow, restoreBounds, wasMaximized, wasFullScreen);
-    setMainWindow(workspaceWindow);
-    getMainWindowState()?.manage(workspaceWindow);
+  if (workspaceWindow && !workspaceWindow.isDestroyed()) {
     sendSuppression(workspaceWindow, false);
-    workspaceWindow.focus();
   }
 
   if (!callWindow.isDestroyed()) {
     callWindow.close();
   }
 
-  logger.info(`Call layout exited: ${reason}`);
+  logger.info(`Call window closed: ${reason}`);
 }
 
 export function setupCallLayoutHandlers(): void {
-  ipcMain.on(IPC_CHANNELS.callConnected, (event) => {
-    if (!isTrustedSender(event.sender)) return;
+  ipcMain.handle(IPC_CHANNELS.callOpen, (event, payload: unknown) => {
+    if (!isTrustedSender(event.sender)) return false;
+    if (!isPendingCallSession(payload)) return false;
 
     const window = BrowserWindow.fromWebContents(event.sender);
-    if (!window) return;
-
-    // The workspace window must never host a call, so it can never start a split.
-    if (getWindowRole(window) === 'workspace') {
-      logger.warn('Ignored call-connected from the workspace window');
-      return;
+    if (!window) return false;
+    if (getWindowRole(window) === 'call') {
+      logger.warn('Ignored call-open from the call window');
+      return false;
     }
 
-    enterCallLayout(window);
+    return openCallWindow(window, {
+      ...payload,
+      peerAvatarUrl: payload.peerAvatarUrl ?? null,
+      banner: payload.banner ?? null,
+    });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.callGetPending, (event) => {
+    if (!isTrustedSender(event.sender)) return null;
+
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window || getWindowRole(window) !== 'call') return null;
+
+    return pendingCall;
+  });
+
+  // Older web builds fire this after LiveKit is already running in-place.
+  // Do not open a second window or resize the current one.
+  ipcMain.on(IPC_CHANNELS.callConnected, (event) => {
+    if (!isTrustedSender(event.sender)) return;
+    logger.debug('Ignored legacy call-connected — waiting for call-open handoff');
   });
 
   ipcMain.on(IPC_CHANNELS.callEnded, (event) => {
@@ -214,10 +189,15 @@ export function setupCallLayoutHandlers(): void {
     if (!active) return;
 
     const window = BrowserWindow.fromWebContents(event.sender);
-    if (!window || window !== active.callWindow) return;
+    if (!window) return;
+    if (window !== active.callWindow && window !== active.workspaceWindow) return;
 
     exitCallLayout('call ended');
   });
 
   logger.debug('Call layout handlers configured');
+}
+
+export function getActiveCallWindow(): BrowserWindow | null {
+  return active?.callWindow ?? getMainWindow();
 }

@@ -22,10 +22,25 @@ export function parseUrl(raw: string): URL | null {
   }
 }
 
+function isLocalDevHost(hostname: string): boolean {
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '[::1]' ||
+    hostname.endsWith('.localhost')
+  );
+}
+
 /** True when the host is the primary Pynn web domain or a subdomain of it. */
 export function isPrimaryHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
-  return host === PRIMARY_HOST || host.endsWith(`.${PRIMARY_HOST}`);
+  if (host === PRIMARY_HOST || host.endsWith(`.${PRIMARY_HOST}`)) {
+    return true;
+  }
+
+  // Development against `pnpm dev`: camera, mic and in-app navigation must work
+  // on localhost / angelhive.localhost without treating them as external.
+  return process.env.NODE_ENV === 'development' && isLocalDevHost(host);
 }
 
 export function classifyUrl(raw: string): UrlClassification {
@@ -78,6 +93,24 @@ export function resolveDeepLinkPath(raw: string): string | null {
   const path = `${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
   if (!path || path === '/') return '/';
   return path.startsWith('/') ? path : `/${path}`;
+}
+
+/**
+ * Resolves a relative or absolute URL from a notification payload to a URL
+ * that is safe to load in the main window. Returns null when it is not on
+ * the primary Pynn host.
+ */
+export function resolveInAppNotificationUrl(raw: string | undefined | null): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith('/')) {
+    const resolved = `${APP_URL.replace(/\/$/, '')}${trimmed}`;
+    return isAllowedMainNavigation(resolved) ? resolved : null;
+  }
+
+  return isAllowedMainNavigation(trimmed) ? trimmed : null;
 }
 
 export function deepLinkToAppUrl(deepLink: string): string {

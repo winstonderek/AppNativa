@@ -9,6 +9,14 @@ const zlib = require('zlib');
 const assetsDir = path.join(__dirname, '..', 'assets');
 fs.mkdirSync(assetsDir, { recursive: true });
 
+const existing = ['icon.png', 'icon.ico', 'icon.icns'].map((name) =>
+  path.join(assetsDir, name),
+);
+if (existing.every((file) => fs.existsSync(file) && fs.statSync(file).size > 2048)) {
+  console.log('Official icons already present — skipping placeholder generation.');
+  process.exit(0);
+}
+
 function crc32(buf) {
   let crc = 0xffffffff;
   for (let i = 0; i < buf.length; i++) {

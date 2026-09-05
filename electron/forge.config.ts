@@ -13,6 +13,11 @@ const config: ForgeConfig = {
     appBundleId: 'ai.pynn.desktop',
     asar: true,
     icon: path.resolve(__dirname, 'assets', 'icon'),
+    extendInfo: {
+      NSUserNotificationsUsageDescription:
+        'Pynn can notify you about messages and activity when the app is in the background.',
+      NSUserNotificationAlertStyle: 'alert',
+    },
     osxSign: process.env.APPLE_IDENTITY
       ? {
           identity: process.env.APPLE_IDENTITY,

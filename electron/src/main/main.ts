@@ -9,6 +9,11 @@ import { APP_ID, APP_NAME, PROTOCOL_SCHEME } from '../shared/constants';
 import { applyLaunchAtStartupSetting } from './auto-start';
 import { setupCallLayoutHandlers } from './call-layout';
 import { consumePendingDeepLinks, handleDeepLink, setupDeepLinkHandlers } from './deep-links';
+import {
+  clearUnreadBadge,
+  registerDesktopNotifications,
+  setupDesktopNotificationHandlers,
+} from './desktop-notifications';
 import { setupSessionDownloads } from './downloads';
 import { logger } from './logger';
 import { setupPermissions } from './permissions';
@@ -46,6 +51,8 @@ if (!gotSingleInstanceLock) {
     setupPermissions();
     setupSessionDownloads();
     setupCallLayoutHandlers();
+    setupDesktopNotificationHandlers();
+    registerDesktopNotifications();
     applyLaunchAtStartupSetting();
     buildApplicationMenu();
 
@@ -87,6 +94,7 @@ if (!gotSingleInstanceLock) {
   });
 
   app.on('before-quit', () => {
+    clearUnreadBadge();
     logger.debug('Application quitting');
   });
 
