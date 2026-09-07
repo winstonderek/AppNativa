@@ -6,6 +6,7 @@ import { APP_NAME, IPC_CHANNELS, WINDOWS_SQUIRREL_APP_ID } from '../shared/const
 import { isAllowedMainNavigation, isPrimaryHost, resolveInAppNotificationUrl } from '../shared/url-utils';
 import { logger } from './logger';
 import { focusMainWindow, getMainWindow } from './window';
+import { applyWindowsTaskbarBadge } from './windows-taskbar-badge';
 
 const MAX_TITLE_LENGTH = 120;
 const MAX_BODY_LENGTH = 280;
@@ -68,6 +69,11 @@ function parsePayload(value: unknown): DesktopNotificationPayload | null {
 export function applyUnreadBadge(count: number): void {
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setBadge(count > 0 ? (count > 99 ? '99+' : String(count)) : '');
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    applyWindowsTaskbarBadge(count);
     return;
   }
 
