@@ -18,6 +18,7 @@ import {
 } from './desktop-notifications';
 import { setupDisplayMediaHandler } from './display-media';
 import { setupSessionDownloads } from './downloads';
+import { attachJsDialogOverrides, setupJsDialogHandlers } from './js-dialogs';
 import { logger } from './logger';
 import { setupPermissions } from './permissions';
 import { handleSquirrelWindowsEvents } from './squirrel';
@@ -62,6 +63,7 @@ if (handleSquirrelWindowsEvents()) {
 
       setupDeepLinkHandlers();
       setupPermissions();
+      setupJsDialogHandlers();
       setupDisplayMediaHandler();
       setupSessionDownloads();
       setupCallLayoutHandlers();
@@ -113,6 +115,7 @@ if (handleSquirrelWindowsEvents()) {
     });
 
     app.on('web-contents-created', (_event, contents) => {
+      attachJsDialogOverrides(contents);
       contents.on('will-attach-webview', (event) => {
         event.preventDefault();
         logger.warn('Blocked webview attachment');

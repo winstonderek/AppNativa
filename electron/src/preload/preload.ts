@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webFrame } from 'electron';
 import type { WindowRole } from '../shared/constants';
 
 /**
@@ -19,6 +19,10 @@ const CHANNEL_CALL_ENDED = 'pynn:call-ended';
 const CHANNEL_CALLS_SUPPRESSED = 'pynn:calls-suppressed';
 const CHANNEL_UNREAD_COUNT = 'pynn:unread-count';
 const CHANNEL_SHOW_NOTIFICATION = 'pynn:show-notification';
+const CHANNEL_JS_ALERT = 'pynn:js-alert';
+const CHANNEL_JS_CONFIRM = 'pynn:js-confirm';
+const CHANNEL_JS_PROMPT_OPEN = 'pynn:js-prompt-open';
+const CHANNEL_JS_PROMPT_POLL = 'pynn:js-prompt-poll';
 
 const ARG_WINDOW_ROLE = '--pynn-window-role=';
 const ARG_APP_VERSION = '--pynn-app-version=';
@@ -97,5 +101,53 @@ contextBridge.exposeInMainWorld('__PYNN_DESKTOP__', {
   version: appVersion,
   platform: process.platform,
 });
+
+function waitForPromptPaint(): void {
+  const until = Date.now() + 16;
+  while (Date.now() < until) {
+    // Yield to the main process so the modal prompt can render.
+  }
+}
+
+contextBridge.exposeInMainWorld('__pynnJsDialogs', {
+  alert: (message: string) => ipcRenderer.sendSync(CHANNEL_JS_ALERT, message),
+  confirm: (message: string) => Boolean(ipcRenderer.sendSync(CHANNEL_JS_CONFIRM, message)),
+  prompt: (message: string, defaultValue: string) => {
+    const id = ipcRenderer.sendSync(CHANNEL_JS_PROMPT_OPEN, message, defaultValue);
+    if (!id) return null;
+    for (;;) {
+      const state = ipcRenderer.sendSync(CHANNEL_JS_PROMPT_POLL, id) as {
+        done?: boolean;
+        value?: string | null;
+      } | null;
+      if (state?.done) return state.value ?? null;
+      waitForPromptPaint();
+    }
+  },
+});
+
+function patchPageDialogs(): void {
+  void webFrame.executeJavaScript(`
+    (() => {
+      const api = window.__pynnJsDialogs;
+      if (!api || window.__pynnJsDialogsPatched) return;
+      window.__pynnJsDialogsPatched = true;
+      window.alert = (message) => {
+        api.alert(message == null ? '' : String(message));
+      };
+      window.confirm = (message) => Boolean(api.confirm(message == null ? '' : String(message)));
+      window.prompt = (message, defaultValue) => {
+        const result = api.prompt(
+          message == null ? '' : String(message),
+          defaultValue == null ? '' : String(defaultValue),
+        );
+        return result == null ? null : String(result);
+      };
+    })();
+  `);
+}
+
+patchPageDialogs();
+process.once('loaded', patchPageDialogs);
 
 export {};

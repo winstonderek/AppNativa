@@ -217,6 +217,7 @@ The app detects system light/dark mode via `nativeTheme` but does **not** overri
 - [ ] Cookies persist between sessions
 - [ ] localStorage / sessionStorage / IndexedDB
 - [ ] Clipboard copy/paste
+- [ ] `alert` / `confirm` / `prompt` show a desktop dialog on macOS and Windows
 
 ### Desktop integration
 

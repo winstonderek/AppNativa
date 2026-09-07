@@ -61,6 +61,16 @@ export const IPC_CHANNELS = {
   screenPickerSources: 'pynn:screen-picker-sources',
   /** Screen picker → main: the chosen source id, or null if cancelled. */
   screenPickerResult: 'pynn:screen-picker-result',
+  /** Renderer → main (sync): window.alert */
+  jsAlert: 'pynn:js-alert',
+  /** Renderer → main (sync): window.confirm */
+  jsConfirm: 'pynn:js-confirm',
+  /** Renderer → main (sync): open a modal prompt window, returns id */
+  jsPromptOpen: 'pynn:js-prompt-open',
+  /** Renderer → main (sync): poll prompt result */
+  jsPromptPoll: 'pynn:js-prompt-poll',
+  /** Prompt window → main: submitted value or null */
+  jsPromptResult: 'pynn:js-prompt-result',
 } as const;
 
 /** Prefixes for webPreferences.additionalArguments, read synchronously by the sandboxed preload. */
