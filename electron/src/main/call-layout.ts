@@ -64,8 +64,8 @@ function isPendingCallSession(value: unknown): value is PendingCallSession {
 
 function callWindowBounds(fromWindow: BrowserWindow): Electron.Rectangle {
   const { workArea } = screen.getDisplayMatching(fromWindow.getBounds());
-  const width = Math.max(MIN_CALL_WINDOW_WIDTH, Math.floor(workArea.width / 4));
-  const height = Math.max(MIN_CALL_WINDOW_HEIGHT, Math.floor(workArea.height / 4));
+  const width = Math.max(MIN_CALL_WINDOW_WIDTH, Math.floor(workArea.width * 0.5));
+  const height = Math.max(MIN_CALL_WINDOW_HEIGHT, Math.floor(workArea.height * 0.75));
   return {
     x: workArea.x + workArea.width - width,
     y: workArea.y,
@@ -75,8 +75,9 @@ function callWindowBounds(fromWindow: BrowserWindow): Electron.Rectangle {
 }
 
 /**
- * Leaves the original window alone and opens a floating call window on the top
- * quarter of the same display. The LiveKit session is handed to that window.
+ * Leaves the original window alone and opens a floating call window on the
+ * right half of the same display (50% × 75% of the work area). The LiveKit
+ * session is handed to that window.
  */
 function openCallWindow(workspaceWindow: BrowserWindow, session: PendingCallSession): boolean {
   if (active) return false;
@@ -96,10 +97,14 @@ function openCallWindow(workspaceWindow: BrowserWindow, session: PendingCallSess
     becomeMain: false,
   });
 
+  // Keep the call chrome out of the captured stream so the local camera
+  // PiP and controls do not appear inside the shared screen.
+  callWindow.setContentProtection(true);
+
   active = { workspaceWindow, callWindow };
   sendSuppression(workspaceWindow, true);
   watchLayout(active);
-  logger.info('Call window opened at the top-right quarter of the display');
+  logger.info('Call window opened at 50% × 75% of the work area');
   return true;
 }
 

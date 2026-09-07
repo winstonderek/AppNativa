@@ -27,6 +27,7 @@ type WindowState = ReturnType<typeof windowStateKeeper>;
 
 let mainWindow: BrowserWindow | null = null;
 let mainWindowState: WindowState | null = null;
+let checkoutWindow: BrowserWindow | null = null;
 const popupWindows = new Set<BrowserWindow>();
 const windowRoles = new WeakMap<BrowserWindow, WindowRole>();
 
@@ -78,6 +79,19 @@ export function getPopupWindowOptions(): Electron.BrowserWindowConstructorOption
     title: APP_NAME,
     ...getPlatformWindowOptions(),
     webPreferences: getWebPreferences('popup'),
+  };
+}
+
+export function getCheckoutWindowOptions(): Electron.BrowserWindowConstructorOptions {
+  return {
+    width: 720,
+    height: 840,
+    minWidth: 480,
+    minHeight: 640,
+    autoHideMenuBar: true,
+    title: APP_NAME,
+    ...getPlatformWindowOptions(),
+    webPreferences: getWebPreferences('checkout'),
   };
 }
 
@@ -293,6 +307,82 @@ export function createPopupWindow(url: string, parent?: WebContents): BrowserWin
   } catch (error) {
     logger.error('Failed to create popup window', error);
     return null;
+  }
+}
+
+/**
+ * Opens hosted Stripe Checkout / Customer Portal inside the desktop app.
+ * Completing or cancelling the flow redirects to the Pynn success/cancel URL,
+ * which is handed back to the main window.
+ */
+export function openCheckoutWindow(url: string): BrowserWindow | null {
+  if (checkoutWindow && !checkoutWindow.isDestroyed()) {
+    checkoutWindow.loadURL(url).catch((err) => logger.error('Checkout reload failed', err));
+    checkoutWindow.show();
+    checkoutWindow.focus();
+    return checkoutWindow;
+  }
+
+  try {
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    const window = new BrowserWindow({
+      ...getCheckoutWindowOptions(),
+      parent,
+      modal: false,
+    });
+
+    checkoutWindow = window;
+    popupWindows.add(window);
+    windowRoles.set(window, 'checkout');
+
+    attachCheckoutWindowHandlers(window);
+
+    window.on('closed', () => {
+      popupWindows.delete(window);
+      if (checkoutWindow === window) checkoutWindow = null;
+    });
+
+    window.loadURL(url).catch((err) => {
+      logger.error('Checkout window load failed', err);
+      window.close();
+    });
+
+    return window;
+  } catch (error) {
+    logger.error('Failed to create checkout window', error);
+    return null;
+  }
+}
+
+function attachCheckoutWindowHandlers(window: BrowserWindow): void {
+  setupNavigationHandlers(window.webContents, { isCheckout: true });
+  setupDownloads(window.webContents);
+  setupContextMenu(window.webContents);
+
+  window.webContents.on('did-create-window', (childWindow) => {
+    popupWindows.add(childWindow);
+    windowRoles.set(childWindow, 'checkout');
+    attachCheckoutWindowHandlers(childWindow);
+    childWindow.on('closed', () => {
+      popupWindows.delete(childWindow);
+    });
+  });
+}
+
+/** After Stripe redirects to a Pynn URL, continue in the main window. */
+export function returnCheckoutToApp(url: string, fromWindow: BrowserWindow): void {
+  const main = getMainWindow();
+  if (main && !main.isDestroyed()) {
+    main.webContents.loadURL(url).catch((err) => logger.error('Checkout return navigation failed', err));
+    focusMainWindow();
+    if (!fromWindow.isDestroyed() && fromWindow !== main) {
+      fromWindow.close();
+    }
+    return;
+  }
+
+  if (!fromWindow.isDestroyed()) {
+    fromWindow.webContents.loadURL(url).catch((err) => logger.error('Checkout fallback navigation failed', err));
   }
 }
 

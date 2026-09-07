@@ -13,10 +13,20 @@ const config: ForgeConfig = {
     appBundleId: 'ai.pynn.desktop',
     asar: true,
     icon: path.resolve(__dirname, 'assets', 'icon'),
+    win32metadata: {
+      CompanyName: 'Pynn',
+      FileDescription: 'Pynn',
+      ProductName: 'Pynn',
+      InternalName: 'Pynn',
+    },
     extendInfo: {
       NSUserNotificationsUsageDescription:
         'Pynn can notify you about messages and activity when the app is in the background.',
       NSUserNotificationAlertStyle: 'alert',
+      NSCameraUsageDescription: 'Pynn needs camera access for video calls.',
+      NSMicrophoneUsageDescription: 'Pynn needs microphone access for calls.',
+      NSScreenCaptureUsageDescription:
+        'Pynn needs screen recording permission so you can share your screen during calls.',
     },
     osxSign: process.env.APPLE_IDENTITY
       ? {
@@ -39,6 +49,7 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({
+      // NuGet id → Start Menu AUMID `com.squirrel.Pynn.pynn` (must match WINDOWS_SQUIRREL_APP_ID).
       name: 'Pynn',
       setupExe: 'Pynn-Setup.exe',
       setupIcon: path.resolve(__dirname, 'assets', 'icon.ico'),

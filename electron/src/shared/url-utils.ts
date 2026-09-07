@@ -5,10 +5,12 @@ import {
   PRIMARY_HOST,
   PROTOCOL_SCHEME,
   SAFE_WEB_PROTOCOLS,
+  STRIPE_CHECKOUT_HOSTS,
 } from './constants';
 
 export type UrlClassification =
   | 'primary'
+  | 'stripe-checkout'
   | 'external-web'
   | 'external-protocol'
   | 'deep-link'
@@ -67,12 +69,33 @@ export function classifyUrl(raw: string): UrlClassification {
     return 'primary';
   }
 
+  if (isStripeCheckoutHost(parsed.hostname)) {
+    return 'stripe-checkout';
+  }
+
   return 'external-web';
+}
+
+export function isStripeCheckoutHost(hostname: string): boolean {
+  return STRIPE_CHECKOUT_HOSTS.has(hostname.toLowerCase());
+}
+
+/**
+ * Checkout windows must follow Stripe plus bank 3DS pages (arbitrary HTTPS).
+ * Primary-host URLs are handed back to the main window instead.
+ */
+export function isAllowedCheckoutNavigation(raw: string): boolean {
+  const classification = classifyUrl(raw);
+  return classification === 'stripe-checkout' || classification === 'external-web';
 }
 
 export function isSafeForExternalOpen(raw: string): boolean {
   const classification = classifyUrl(raw);
-  return classification === 'external-web' || classification === 'external-protocol';
+  return (
+    classification === 'external-web' ||
+    classification === 'external-protocol' ||
+    classification === 'stripe-checkout'
+  );
 }
 
 export function isAllowedMainNavigation(raw: string): boolean {

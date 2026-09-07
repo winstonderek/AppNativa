@@ -1,6 +1,8 @@
-import { BrowserWindow, Notification, app, ipcMain } from 'electron';
+import { BrowserWindow, Notification, app, ipcMain, shell } from 'electron';
 import Store from 'electron-store';
-import { APP_NAME, IPC_CHANNELS } from '../shared/constants';
+import fs from 'node:fs';
+import path from 'node:path';
+import { APP_NAME, IPC_CHANNELS, WINDOWS_SQUIRREL_APP_ID } from '../shared/constants';
 import { isAllowedMainNavigation, isPrimaryHost, resolveInAppNotificationUrl } from '../shared/url-utils';
 import { logger } from './logger';
 import { focusMainWindow, getMainWindow } from './window';
@@ -16,12 +18,14 @@ interface DesktopNotificationPayload {
 
 interface NotificationPrefs {
   registeredWithSystem: boolean;
+  registeredWithWindowsToasts: boolean;
 }
 
 const prefs = new Store<NotificationPrefs>({
   name: 'notifications',
   defaults: {
     registeredWithSystem: false,
+    registeredWithWindowsToasts: false,
   },
 });
 
@@ -74,6 +78,118 @@ export function clearUnreadBadge(): void {
   applyUnreadBadge(0);
 }
 
+function getAssetsDir(): string {
+  return path.join(__dirname, '..', '..', 'assets');
+}
+
+function getNotificationIconPath(): string | undefined {
+  const assetsDir = getAssetsDir();
+  const candidates =
+    process.platform === 'win32'
+      ? [path.join(assetsDir, 'icon.ico'), path.join(assetsDir, 'icon.png')]
+      : [path.join(assetsDir, 'icon.png')];
+
+  return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
+function getSquirrelUpdateExe(): string | null {
+  if (process.platform !== 'win32') return null;
+  const updateExe = path.resolve(path.dirname(process.execPath), '..', 'Update.exe');
+  return fs.existsSync(updateExe) ? updateExe : null;
+}
+
+/** Identity Windows uses to match toasts to the Start Menu shortcut. */
+export function getWindowsAppUserModelId(): string {
+  if (!app.isPackaged) {
+    return process.execPath;
+  }
+  return WINDOWS_SQUIRREL_APP_ID;
+}
+
+/** Call as early as possible on Windows so Chromium inherits the AUMID. */
+export function applyWindowsAppUserModelId(): void {
+  if (process.platform !== 'win32') return;
+  const aumid = getWindowsAppUserModelId();
+  app.setAppUserModelId(aumid);
+  logger.debug(`Windows AppUserModelID: ${aumid}`);
+}
+
+function getStartMenuShortcutPath(): string {
+  return path.join(
+    app.getPath('appData'),
+    'Microsoft',
+    'Windows',
+    'Start Menu',
+    'Programs',
+    `${APP_NAME}.lnk`,
+  );
+}
+
+/**
+ * Windows toasts only appear when a Start Menu shortcut exists with the same
+ * AppUserModelID (and ToastActivatorCLSID) as the running process. Squirrel
+ * writes one on install; ZIP / older installs may not have a matching one.
+ */
+function ensureWindowsStartMenuShortcut(aumid: string): void {
+  const shortcutPath = getStartMenuShortcutPath();
+  const updateExe = getSquirrelUpdateExe();
+  const fallbackTarget = updateExe ?? process.execPath;
+  const icon = getNotificationIconPath();
+  const clsid = (app as Electron.App & { toastActivatorCLSID?: string }).toastActivatorCLSID;
+
+  const next: Electron.ShortcutDetails = {
+    target: fallbackTarget,
+    cwd: path.dirname(fallbackTarget),
+    description: APP_NAME,
+    appUserModelId: aumid,
+    ...(icon ? { icon, iconIndex: 0 } : {}),
+    ...(clsid ? { toastActivatorClsid: clsid } : {}),
+  };
+
+  try {
+    fs.mkdirSync(path.dirname(shortcutPath), { recursive: true });
+
+    if (fs.existsSync(shortcutPath)) {
+      try {
+        const current = shell.readShortcutLink(shortcutPath);
+        const sameId = current.appUserModelId === aumid;
+        const sameClsid = !clsid || current.toastActivatorClsid === clsid;
+        if (sameId && sameClsid) {
+          logger.debug(`Windows notification shortcut already registered: ${aumid}`);
+          return;
+        }
+        if (current.target) {
+          next.target = current.target;
+          next.cwd = current.cwd || path.dirname(current.target);
+        }
+        if (current.args) next.args = current.args;
+      } catch {
+        logger.debug('Existing Start Menu shortcut could not be read; replacing it');
+      }
+
+      if (!shell.writeShortcutLink(shortcutPath, 'replace', next)) {
+        throw new Error('writeShortcutLink(replace) returned false');
+      }
+    } else if (!shell.writeShortcutLink(shortcutPath, 'create', next)) {
+      throw new Error('writeShortcutLink(create) returned false');
+    }
+
+    logger.info(`Windows notification shortcut ready (${aumid})`);
+  } catch (error) {
+    logger.warn('Failed to register Windows notification shortcut', error);
+  }
+}
+
+/**
+ * After `ready`: keep AUMID set and make sure the Start Menu shortcut matches.
+ * Safe to call on every launch.
+ */
+export function applyWindowsNotificationIdentity(): void {
+  if (process.platform !== 'win32') return;
+  applyWindowsAppUserModelId();
+  ensureWindowsStartMenuShortcut(getWindowsAppUserModelId());
+}
+
 function focusAndNavigate(url: string | null): void {
   const window = getMainWindow();
   if (window && !window.isDestroyed()) {
@@ -106,11 +222,13 @@ function showNativeNotification(
   }
 
   const targetUrl = resolveInAppNotificationUrl(payload.url);
+  const icon = getNotificationIconPath();
   const notification = new Notification({
     title: payload.title,
     body: payload.body ?? '',
     silent: false,
     timeoutType: 'default',
+    ...(icon ? { icon } : {}),
   });
 
   notification.on('failed', (_event, error) => {
@@ -126,13 +244,26 @@ function showNativeNotification(
 }
 
 /**
- * Posts one native notification so macOS creates the Pynn row in
- * System Settings → Notifications. Safe to call every launch; only the
- * first successful registration is persisted.
+ * Posts one native notification so the OS creates the Pynn row in
+ * notification settings. Safe to call every launch; only the first
+ * successful registration per platform is persisted.
  */
 export function registerDesktopNotifications(): void {
   if (!Notification.isSupported()) {
     logger.warn('Cannot register notifications — API not supported');
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    if (prefs.get('registeredWithWindowsToasts')) return;
+    showNativeNotification(
+      {
+        title: APP_NAME,
+        body: 'Notifications are enabled. You can change this in Windows Settings.',
+      },
+      { ignoreFocus: true },
+    );
+    prefs.set('registeredWithWindowsToasts', true);
     return;
   }
 

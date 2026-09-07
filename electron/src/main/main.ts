@@ -10,13 +10,17 @@ import { applyLaunchAtStartupSetting } from './auto-start';
 import { setupCallLayoutHandlers } from './call-layout';
 import { consumePendingDeepLinks, handleDeepLink, setupDeepLinkHandlers } from './deep-links';
 import {
+  applyWindowsAppUserModelId,
+  applyWindowsNotificationIdentity,
   clearUnreadBadge,
   registerDesktopNotifications,
   setupDesktopNotificationHandlers,
 } from './desktop-notifications';
+import { setupDisplayMediaHandler } from './display-media';
 import { setupSessionDownloads } from './downloads';
 import { logger } from './logger';
 import { setupPermissions } from './permissions';
+import { handleSquirrelWindowsEvents } from './squirrel';
 import { setupTray } from './tray';
 import { setupAutoUpdater } from './updater';
 import {
@@ -25,83 +29,94 @@ import {
   focusMainWindow,
 } from './window';
 
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-
-if (!gotSingleInstanceLock) {
-  app.quit();
+if (handleSquirrelWindowsEvents()) {
+  // Squirrel.Windows asked this process to create/remove shortcuts and quit.
 } else {
-  app.on('second-instance', (_event, argv) => {
-    const deepLink = argv.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`));
-    if (deepLink) {
-      handleDeepLink(deepLink);
-    }
-    focusMainWindow();
-  });
+  applyWindowsAppUserModelId();
 
-  app.whenReady().then(async () => {
-    app.setName(APP_NAME);
-    app.setAppUserModelId(APP_ID);
+  const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
-    if (process.platform === 'darwin') {
-      // Keep the native title bar (traffic lights area) in light/white chrome on macOS.
-      nativeTheme.themeSource = 'light';
-    }
-
-    setupDeepLinkHandlers();
-    setupPermissions();
-    setupSessionDownloads();
-    setupCallLayoutHandlers();
-    setupDesktopNotificationHandlers();
-    registerDesktopNotifications();
-    applyLaunchAtStartupSetting();
-    buildApplicationMenu();
-
-    session.defaultSession.setSpellCheckerEnabled(true);
-
-    nativeTheme.on('updated', () => {
-      logger.debug(`System theme changed: ${nativeTheme.shouldUseDarkColors ? 'dark' : 'light'}`);
+  if (!gotSingleInstanceLock) {
+    app.quit();
+  } else {
+    app.on('second-instance', (_event, argv) => {
+      const deepLink = argv.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`));
+      if (deepLink) {
+        handleDeepLink(deepLink);
+      }
+      focusMainWindow();
     });
 
-    powerMonitor.on('resume', () => {
-      logger.debug('System resumed from sleep');
-    });
-
-    powerMonitor.on('suspend', () => {
-      logger.debug('System suspending');
-    });
-
-    const pendingUrl = consumePendingDeepLinks();
-    createMainWindow(pendingUrl);
-
-    setupTray();
-    setupAutoUpdater();
-
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow();
+    app.whenReady().then(async () => {
+      app.setName(APP_NAME);
+      if (process.platform === 'win32') {
+        applyWindowsNotificationIdentity();
       } else {
-        focusMainWindow();
+        app.setAppUserModelId(APP_ID);
+      }
+
+      if (process.platform === 'darwin') {
+        // Keep the native title bar (traffic lights area) in light/white chrome on macOS.
+        nativeTheme.themeSource = 'light';
+      }
+
+      setupDeepLinkHandlers();
+      setupPermissions();
+      setupDisplayMediaHandler();
+      setupSessionDownloads();
+      setupCallLayoutHandlers();
+      setupDesktopNotificationHandlers();
+      registerDesktopNotifications();
+      applyLaunchAtStartupSetting();
+      buildApplicationMenu();
+
+      session.defaultSession.setSpellCheckerEnabled(true);
+
+      nativeTheme.on('updated', () => {
+        logger.debug(`System theme changed: ${nativeTheme.shouldUseDarkColors ? 'dark' : 'light'}`);
+      });
+
+      powerMonitor.on('resume', () => {
+        logger.debug('System resumed from sleep');
+      });
+
+      powerMonitor.on('suspend', () => {
+        logger.debug('System suspending');
+      });
+
+      const pendingUrl = consumePendingDeepLinks();
+      createMainWindow(pendingUrl);
+
+      setupTray();
+      setupAutoUpdater();
+
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) {
+          createMainWindow();
+        } else {
+          focusMainWindow();
+        }
+      });
+
+      logger.info(`${APP_NAME} started`);
+    });
+
+    app.on('window-all-closed', () => {
+      if (process.platform !== 'darwin') {
+        app.quit();
       }
     });
 
-    logger.info(`${APP_NAME} started`);
-  });
-
-  app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit();
-    }
-  });
-
-  app.on('before-quit', () => {
-    clearUnreadBadge();
-    logger.debug('Application quitting');
-  });
-
-  app.on('web-contents-created', (_event, contents) => {
-    contents.on('will-attach-webview', (event) => {
-      event.preventDefault();
-      logger.warn('Blocked webview attachment');
+    app.on('before-quit', () => {
+      clearUnreadBadge();
+      logger.debug('Application quitting');
     });
-  });
+
+    app.on('web-contents-created', (_event, contents) => {
+      contents.on('will-attach-webview', (event) => {
+        event.preventDefault();
+        logger.warn('Blocked webview attachment');
+      });
+    });
+  }
 }

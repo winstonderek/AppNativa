@@ -68,8 +68,8 @@ contextBridge.exposeInMainWorld('pynnDesktop', {
   },
 
   /**
-   * Ask the shell to open a floating call window on the top quarter of the
-   * display and hand this LiveKit session to it. The current window stays put.
+   * Ask the shell to open a floating call window (50% × 75% of the work area)
+   * and hand this LiveKit session to it. The current window stays put.
    */
   openCallWindow: (session: unknown) => ipcRenderer.invoke(CHANNEL_CALL_OPEN, session),
 

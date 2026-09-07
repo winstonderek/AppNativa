@@ -79,7 +79,8 @@ Examples (prepared for future use):
 - `webSecurity: true` (never disabled)
 - Remote content treated as untrusted
 - Navigation restricted on the main window to `angelhive.pynn.ai` and subdomains
-- External links validated before `shell.openExternal()`
+- Stripe Checkout / Customer Portal (`checkout.stripe.com`, `billing.stripe.com`, `pay.stripe.com`) open in an in-app window; success/cancel URLs return to the main window
+- Other external links validated before `shell.openExternal()`
 - Invalid TLS certificates rejected in production
 - No sensitive data in logs (tokens, cookies, passwords redacted)
 
@@ -116,7 +117,7 @@ Generate proper platform icons from your PNG using [icon-gen](https://www.npmjs.
 3. Set secrets in GitHub Actions:
    - `APPLE_IDENTITY` — e.g. `Developer ID Application: Your Name (TEAMID)`
    - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
-4. Hardened runtime entitlements are in `entitlements.plist` (camera, mic, network).
+4. Hardened runtime entitlements are in `entitlements.plist` (camera, mic, screen recording, network).
 
 ### Windows
 
@@ -143,6 +144,25 @@ Workflow: `.github/workflows/build-desktop.yml`
 - **Windows** (`windows-latest`) → `.exe` + `.zip`
 
 Push to `main` or tag `v*` to trigger builds. Artifacts are uploaded for download from the Actions run.
+
+## Native notifications
+
+The web app already calls `pynnDesktop.showNotification` / `setUnreadCount`. The desktop shell shows an OS toast when Pynn is in the background. No Next.js changes are required.
+
+### Windows
+
+Toast notifications need a Start Menu shortcut whose AppUserModelID matches the running process. Squirrel writes `com.squirrel.Pynn.pynn`. The app:
+
+- Sets that same ID (instead of `ai.pynn.desktop`, which made toasts fail silently)
+- Creates or repairs the Start Menu shortcut on launch (Squirrel, ZIP, and older installs)
+- Handles `--squirrel-install` / `--squirrel-updated` so the installer creates the shortcut
+- Attaches the app icon to each toast
+
+After installing a build with this fix, Pynn should appear under **Windows Settings → System → Notifications**. The first launch also posts a one-time registration toast.
+
+### macOS
+
+The first successful toast creates the **Pynn** row in **System Settings → Notifications**.
 
 ## System tray
 
@@ -188,7 +208,8 @@ The app detects system light/dark mode via `nativeTheme` but does **not** overri
 - [ ] Microphone permission
 - [ ] Camera permission
 - [ ] WebRTC calls
-- [ ] Screen sharing
+- [ ] Screen sharing (macOS: grant Screen Recording to Pynn if prompted)
+- [ ] Local camera stays visible as a small PiP during video / screen share
 - [ ] Fullscreen (video calls, presentations)
 
 ### Browser APIs
@@ -202,6 +223,8 @@ The app detects system light/dark mode via `nativeTheme` but does **not** overri
 - [ ] Window resize, maximize, minimize
 - [ ] Window position/size remembered
 - [ ] `angelhive.pynn.ai` links open in a new in-app window
+- [ ] Stripe Checkout / billing portal stay inside the desktop app
+- [ ] After paying or cancelling, the main window shows the Pynn return URL
 - [ ] External links open in default browser
 - [ ] macOS: close window keeps app running
 - [ ] Windows: close exits app

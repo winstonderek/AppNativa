@@ -2,6 +2,18 @@ export const APP_NAME = 'Pynn';
 export const APP_ID = 'ai.pynn.desktop';
 export const PROTOCOL_SCHEME = 'pynn';
 
+/**
+ * Squirrel.Windows NuGet id — must match MakerSquirrel `name` in forge.config.ts.
+ * Start Menu shortcuts get AppUserModelID `com.squirrel.{id}.{exe}`.
+ */
+export const WINDOWS_SQUIRREL_PACKAGE_ID = 'Pynn';
+
+/** Packaged Windows executable — must match packagerConfig.executableName. */
+export const WINDOWS_SQUIRREL_EXE_NAME = 'pynn';
+
+/** AppUserModelID written on Squirrel shortcuts. Toast notifications fail if this mismatches. */
+export const WINDOWS_SQUIRREL_APP_ID = `com.squirrel.${WINDOWS_SQUIRREL_PACKAGE_ID}.${WINDOWS_SQUIRREL_EXE_NAME}`;
+
 /** Primary hostname — navigation in the main window stays on this domain and subdomains. */
 export const PRIMARY_HOST = 'angelhive.pynn.ai';
 
@@ -13,11 +25,22 @@ export const DEFAULT_WINDOW_HEIGHT = 900;
 export const MIN_WINDOW_WIDTH = 800;
 export const MIN_WINDOW_HEIGHT = 600;
 
-/** The floating call window is a quarter of the display, so its floor is lower. */
-export const MIN_CALL_WINDOW_WIDTH = 420;
-export const MIN_CALL_WINDOW_HEIGHT = 200;
+/** The floating call window must fit video, controls, and the local camera PiP. */
+export const MIN_CALL_WINDOW_WIDTH = 480;
+export const MIN_CALL_WINDOW_HEIGHT = 400;
 
-export type WindowRole = 'main' | 'workspace' | 'call' | 'popup';
+export type WindowRole = 'main' | 'workspace' | 'call' | 'popup' | 'checkout';
+
+/**
+ * Hosted Stripe surfaces that should stay inside the desktop app instead of
+ * the system browser. 3DS / bank challenge pages are not listed here — those
+ * are allowed only after a checkout window is already open.
+ */
+export const STRIPE_CHECKOUT_HOSTS = new Set([
+  'checkout.stripe.com',
+  'billing.stripe.com',
+  'pay.stripe.com',
+]);
 
 export const IPC_CHANNELS = {
   /** Renderer → main: open a floating call window and hand the session over. */
@@ -34,6 +57,10 @@ export const IPC_CHANNELS = {
   unreadCount: 'pynn:unread-count',
   /** Renderer → main: show a native OS notification when the app is in the background. */
   showNotification: 'pynn:show-notification',
+  /** Main → screen picker: the list of capturable screens and windows. */
+  screenPickerSources: 'pynn:screen-picker-sources',
+  /** Screen picker → main: the chosen source id, or null if cancelled. */
+  screenPickerResult: 'pynn:screen-picker-result',
 } as const;
 
 /** Prefixes for webPreferences.additionalArguments, read synchronously by the sandboxed preload. */
