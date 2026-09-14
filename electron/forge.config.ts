@@ -91,7 +91,7 @@ const config: ForgeConfig = {
         owner:
           process.env.GITHUB_REPOSITORY?.split('/')[0] ??
           process.env.GITHUB_REPOSITORY_OWNER ??
-          'DerekCourtBrain',
+          'winstonderek',
         name:
           process.env.GITHUB_REPOSITORY?.split('/')[1] ??
           process.env.GITHUB_REPOSITORY_NAME ??

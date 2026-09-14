@@ -3,7 +3,7 @@ export const APP_ID = 'ai.pynn.desktop';
 export const PROTOCOL_SCHEME = 'pynn';
 
 /** GitHub repo that hosts desktop installers and auto-update assets. */
-export const GITHUB_UPDATE_OWNER = 'DerekCourtBrain';
+export const GITHUB_UPDATE_OWNER = 'winstonderek';
 export const GITHUB_UPDATE_REPO = 'AppNativa';
 
 /**
