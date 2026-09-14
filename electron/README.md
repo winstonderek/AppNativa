@@ -131,7 +131,7 @@ Add these as **GitHub Actions secrets** (repo → **Settings → Secrets and var
 | `APPLE_TEAM_ID` | 10-character Team ID from [developer.apple.com/account](https://developer.apple.com/account) |
 | `WINDOWS_CERTIFICATE` | Base64 of the Authenticode `.pfx` |
 | `WINDOWS_CERTIFICATE_PASSWORD` | Password of that `.pfx` |
-| `SQUIRREL_ICON_URL` | `https://raw.githubusercontent.com/DerekCourtBrain/AppNativa/main/electron/assets/icon.ico` |
+| `SQUIRREL_ICON_URL` | `https://raw.githubusercontent.com/winstonderek/AppNativa/main/electron/assets/icon.ico` |
 
 ### macOS
 
@@ -177,7 +177,7 @@ Packaged builds check for a new GitHub Release 10 seconds after launch, download
 | Platform | Mechanism |
 |----------|-----------|
 | macOS | `electron-updater` + `latest-mac.yml` + the `.zip` in the GitHub Release. The app **must** be signed and notarized. |
-| Windows | Squirrel (`Update.exe`) + `RELEASES` / `.nupkg` at `https://github.com/DerekCourtBrain/AppNativa/releases/latest/download` |
+| Windows | Squirrel (`Update.exe`) + `RELEASES` / `.nupkg` at `https://github.com/winstonderek/AppNativa/releases/latest/download` |
 
 ### Ship an update
 
