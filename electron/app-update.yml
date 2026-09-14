@@ -1,0 +1,4 @@
+provider: github
+owner: DerekCourtBrain
+repo: AppNativa
+updaterCacheDirName: pynn-updater

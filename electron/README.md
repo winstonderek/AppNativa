@@ -30,19 +30,21 @@ This opens Pynn in a desktop window at `https://angelhive.pynn.ai`.
 | `npm run lint` | Type-check without emitting |
 | `npm run package` | Package without installers |
 | `npm run make` | Build platform installers (`.dmg`, `.exe`, `.zip`) |
-| `npm run publish` | Publish to GitHub Releases (requires publisher config) |
+| `npm run publish` | Build and upload to a **draft** GitHub Release (`GITHUB_TOKEN` required). CI publishes non-draft releases from `v*` tags. |
 
 ## Versioning
 
-Semantic versioning starting at `1.0.0`:
+Semantic versioning starting at `1.0.0`. The Git tag **must** match `electron/package.json`:
 
 ```bash
-npm version patch   # 1.0.1
-npm version minor   # 1.1.0
-npm version major   # 2.0.0
+cd electron
+npm version patch   # 1.0.1 — updates package.json and creates git tag v1.0.1
+git push origin HEAD --tags
 ```
 
-Tag releases with `v*` (e.g. `v1.0.0`) to trigger GitHub Actions builds.
+`npm version minor` / `npm version major` work the same way. Pushing a `v*` tag triggers GitHub Actions, which builds installers and publishes a GitHub Release. Clients with a packaged build then pick up that release automatically.
+
+Do not tag `v1.0.1` while `package.json` still says `1.0.0` — the workflow will fail on purpose.
 
 ## Project structure
 
@@ -55,6 +57,7 @@ electron/
 ├── static/             # Loading and error pages
 ├── assets/             # App icons (replace placeholders before release)
 ├── scripts/            # Build helpers
+├── app-update.yml      # electron-updater GitHub feed (bundled into the app)
 ├── forge.config.ts     # Electron Forge packaging config
 └── entitlements.plist  # macOS hardened runtime entitlements
 ```
@@ -99,51 +102,106 @@ Generate proper platform icons from your PNG using [icon-gen](https://www.npmjs.
 | Variable | Used for |
 |----------|----------|
 | `NODE_ENV=development` | Enables DevTools, verbose logging, certificate bypass |
-| `APPLE_IDENTITY` | macOS code signing identity |
-| `APPLE_ID` | Apple ID for notarization |
-| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for notarization |
-| `APPLE_TEAM_ID` | Apple Developer Team ID |
+| `APPLE_IDENTITY` | macOS code signing identity, e.g. `Developer ID Application: Pynn (TEAMID)` |
+| `APPLE_ID` | Apple ID email used for notarization |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password (not the Apple ID password) |
+| `APPLE_TEAM_ID` | 10-character Apple Developer Team ID |
+| `APPLE_CERTIFICATE` | Base64 of the Developer ID Application `.p12` (CI) |
+| `APPLE_CERTIFICATE_PASSWORD` | Password of that `.p12` |
+| `WINDOWS_CERTIFICATE` | Base64 of the Authenticode `.pfx` (CI) |
+| `WINDOWS_CERTIFICATE_FILE` | Path to the `.pfx` on disk (set automatically in CI) |
+| `WINDOWS_CERTIFICATE_PASSWORD` | Password of that `.pfx` |
+| `SQUIRREL_ICON_URL` | HTTPS URL of `icon.ico` for Squirrel shortcuts |
 | `GITHUB_TOKEN` | GitHub Releases publishing |
 | `GITHUB_REPOSITORY_OWNER` | Publisher config override |
 | `GITHUB_REPOSITORY_NAME` | Publisher config override |
-| `WINDOWS_CERTIFICATE_PASSWORD` | Windows code signing (CI) |
+| `GITHUB_RELEASE_DRAFT` | Set to `false` to publish a non-draft GitHub Release (CI does this on tags). Local `npm run publish` stays draft. |
 
 ## Code signing
 
+Add these as **GitHub Actions secrets** (repo → **Settings → Secrets and variables → Actions**). Never commit `.p12` / `.pfx` files.
+
+| Secret | What to paste |
+|--------|----------------|
+| `APPLE_CERTIFICATE` | Base64 of the **Developer ID Application** `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | Password you set when exporting the `.p12` |
+| `APPLE_IDENTITY` | Exact identity string, e.g. `Developer ID Application: Pynn (ABCDE12345)` |
+| `APPLE_ID` | Your Apple ID email |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password from [appleid.apple.com](https://appleid.apple.com) (`xxxx-xxxx-xxxx-xxxx`) |
+| `APPLE_TEAM_ID` | 10-character Team ID from [developer.apple.com/account](https://developer.apple.com/account) |
+| `WINDOWS_CERTIFICATE` | Base64 of the Authenticode `.pfx` |
+| `WINDOWS_CERTIFICATE_PASSWORD` | Password of that `.pfx` |
+| `SQUIRREL_ICON_URL` | `https://raw.githubusercontent.com/DerekCourtBrain/AppNativa/main/electron/assets/icon.ico` |
+
 ### macOS
 
-1. Enroll in the Apple Developer Program.
-2. Create a **Developer ID Application** certificate.
-3. Set secrets in GitHub Actions:
-   - `APPLE_IDENTITY` — e.g. `Developer ID Application: Your Name (TEAMID)`
-   - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
-4. Hardened runtime entitlements are in `entitlements.plist` (camera, mic, screen recording, network).
+1. Apple Developer Program → **Certificates, Identifiers & Profiles** → create **Developer ID Application** (not Apple Development, not Mac App Store). Bundle ID for this app is `ai.pynn.desktop`.
+2. Install the cert in Keychain (or Xcode). Confirm with:
+
+   ```bash
+   security find-identity -p codesigning -v
+   ```
+
+   Copy the line that starts with `Developer ID Application:` into `APPLE_IDENTITY`.
+3. Export it: Keychain Access → **My Certificates** → the Developer ID Application cert → right click → **Export** → `.p12`, with a password.
+4. Encode for GitHub (macOS):
+
+   ```bash
+   base64 -b 0 -i ~/Desktop/DeveloperID.p12 | pbcopy
+   ```
+
+   Paste that into `APPLE_CERTIFICATE`.
+5. Create an **app-specific password** at appleid.apple.com → Sign-In and Security → App-Specific Passwords. Put it in `APPLE_APP_SPECIFIC_PASSWORD`. Do **not** use your Apple ID login password.
+6. Hardened runtime entitlements are in `entitlements.plist` (camera, mic, screen recording, network).
 
 ### Windows
 
-1. Obtain an Authenticode code signing certificate.
-2. Store the certificate as a GitHub secret and configure signing in CI.
-3. Squirrel.Windows produces `Pynn-Setup.exe`.
+This path needs an exportable Authenticode `.pfx` (OV/EV that you can export, or a legacy software cert). If you only have **Azure Trusted Signing** or a USB hardware token, signing will not pick up these secrets — say so and we can wire that instead.
+
+1. Export the cert as `.pfx` with a password (include the private key).
+2. Encode for GitHub (PowerShell):
+
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\pynn.pfx")) | Set-Clipboard
+   ```
+
+   Paste that into `WINDOWS_CERTIFICATE`. Put the PFX password in `WINDOWS_CERTIFICATE_PASSWORD`.
+3. Squirrel.Windows produces `Pynn-Setup.exe`. Forge signs both the packaged `pynn.exe` and the installer when those secrets are present.
 
 Signing is skipped when secrets are not configured — builds still succeed for testing.
 
 ## Auto-update
 
-Configured via `electron-updater` in `src/main/updater.ts`:
+Packaged builds check for a new GitHub Release 10 seconds after launch, download it in the background, then ask the user to restart. **Help → Check for Updates…** (Windows) or **Pynn → Check for Updates…** (macOS) runs the same check immediately. Disabled in development.
 
-- Disabled in development
-- Checks for updates 10 seconds after launch in production
-- Requires a published GitHub Release with assets from `npm run publish`
-- Update `forge.config.ts` publisher repository to match your GitHub repo
+| Platform | Mechanism |
+|----------|-----------|
+| macOS | `electron-updater` + `latest-mac.yml` + the `.zip` in the GitHub Release. The app **must** be signed and notarized. |
+| Windows | Squirrel (`Update.exe`) + `RELEASES` / `.nupkg` at `https://github.com/DerekCourtBrain/AppNativa/releases/latest/download` |
+
+### Ship an update
+
+1. Make sure [code signing](#code-signing) secrets are set. Unsigned macOS builds will not auto-update.
+2. The GitHub repo must allow unauthenticated download of Release assets (public repo, or a public releases repo). Private assets 404 in the client.
+3. Users need **one** install of a build that already contains this updater. Older shells will not self-update; send them `Pynn-Setup.exe` / `.dmg` once.
+4. Bump `electron/package.json`, commit, tag `vX.Y.Z`, push the tag.
+5. Wait for **Build Pynn Desktop** to finish. Confirm the GitHub Release is published (not draft) and includes:
+   - macOS: `.dmg`, `.zip`, `latest-mac.yml`
+   - Windows: `Pynn-Setup.exe`, `RELEASES`, `*.nupkg`, `latest.yml`
+6. Restart a packaged client (or use **Check for Updates…**). It should download and offer to restart.
+
+`latest.yml` / `latest-mac.yml` are generated by the Forge `postMake` hook. `app-update.yml` is bundled into the app resources so `electron-updater` knows which GitHub repo to query.
 
 ## GitHub Actions
 
 Workflow: `.github/workflows/build-desktop.yml`
 
-- **macOS** (`macos-latest`) → `.dmg` + `.zip`
-- **Windows** (`windows-latest`) → `.exe` + `.zip`
+- **macOS** (`macos-latest`) → `.dmg` + `.zip` + `latest-mac.yml`
+- **Windows** (`windows-latest`) → Squirrel `.exe` / `.nupkg` / `RELEASES` + `.zip` + `latest.yml`
+- Push to `main` or a PR → build artifacts only
+- Tag `v*` → same build, then a non-draft GitHub Release with those assets
 
-Push to `main` or tag `v*` to trigger builds. Artifacts are uploaded for download from the Actions run.
+CI currently builds **arm64 macOS** (`macos-latest`). Intel Macs need a separate `darwin/x64` (or universal) job if you support them.
 
 ## Native notifications
 
@@ -230,6 +288,7 @@ The app detects system light/dark mode via `nativeTheme` but does **not** overri
 - [ ] macOS: close window keeps app running
 - [ ] Windows: close exits app
 - [ ] Installers run correctly
+- [ ] Packaged build: Check for Updates finds a newer GitHub Release and restarts into it
 
 ## Development vs production
 

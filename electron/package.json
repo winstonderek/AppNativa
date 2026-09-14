@@ -7,6 +7,10 @@
   "author": "Pynn",
   "license": "UNLICENSED",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DerekCourtBrain/AppNativa.git"
+  },
   "config": {
     "forge": "./forge.config.ts"
   },

@@ -2,6 +2,10 @@ export const APP_NAME = 'Pynn';
 export const APP_ID = 'ai.pynn.desktop';
 export const PROTOCOL_SCHEME = 'pynn';
 
+/** GitHub repo that hosts desktop installers and auto-update assets. */
+export const GITHUB_UPDATE_OWNER = 'DerekCourtBrain';
+export const GITHUB_UPDATE_REPO = 'AppNativa';
+
 /**
  * Squirrel.Windows NuGet id — must match MakerSquirrel `name` in forge.config.ts.
  * Start Menu shortcuts get AppUserModelID `com.squirrel.{id}.{exe}`.

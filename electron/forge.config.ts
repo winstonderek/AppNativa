@@ -5,6 +5,20 @@ import { MakerDMG } from '@electron-forge/maker-dmg';
 import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
 import { PublisherGithub } from '@electron-forge/publisher-github';
 import path from 'node:path';
+import { generateUpdateManifests } from './scripts/generate-update-manifests';
+
+const windowsCertificateFile = process.env.WINDOWS_CERTIFICATE_FILE;
+const windowsCertificatePassword = process.env.WINDOWS_CERTIFICATE_PASSWORD;
+
+const windowsSign =
+  windowsCertificateFile && windowsCertificatePassword
+    ? {
+        certificateFile: windowsCertificateFile,
+        certificatePassword: windowsCertificatePassword,
+        timestampServer: 'http://timestamp.digicert.com',
+        hashes: ['sha256' as const],
+      }
+    : undefined;
 
 const config: ForgeConfig = {
   packagerConfig: {
@@ -12,6 +26,7 @@ const config: ForgeConfig = {
     executableName: 'pynn',
     appBundleId: 'ai.pynn.desktop',
     asar: true,
+    extraResource: [path.resolve(__dirname, 'app-update.yml')],
     icon: path.resolve(__dirname, 'assets', 'icon'),
     win32metadata: {
       CompanyName: 'Pynn',
@@ -45,6 +60,7 @@ const config: ForgeConfig = {
             teamId: process.env.APPLE_TEAM_ID!,
           }
         : undefined,
+    ...(windowsSign ? { windowsSign } : {}),
   },
   rebuildConfig: {},
   makers: [
@@ -56,6 +72,12 @@ const config: ForgeConfig = {
       // Squirrel requires HTTPS iconUrl for shortcuts; set after pushing to GitHub:
       // SQUIRREL_ICON_URL=https://raw.githubusercontent.com/<owner>/<repo>/main/electron/assets/icon.ico
       ...(process.env.SQUIRREL_ICON_URL ? { iconUrl: process.env.SQUIRREL_ICON_URL } : {}),
+      ...(windowsSign
+        ? {
+            certificateFile: windowsCertificateFile!,
+            certificatePassword: windowsCertificatePassword,
+          }
+        : {}),
     }),
     new MakerZIP({}, ['darwin', 'win32']),
     new MakerDMG({
@@ -66,13 +88,24 @@ const config: ForgeConfig = {
   publishers: [
     new PublisherGithub({
       repository: {
-        owner: process.env.GITHUB_REPOSITORY_OWNER ?? 'your-org',
-        name: process.env.GITHUB_REPOSITORY_NAME ?? 'pynn-desktop',
+        owner:
+          process.env.GITHUB_REPOSITORY?.split('/')[0] ??
+          process.env.GITHUB_REPOSITORY_OWNER ??
+          'DerekCourtBrain',
+        name:
+          process.env.GITHUB_REPOSITORY?.split('/')[1] ??
+          process.env.GITHUB_REPOSITORY_NAME ??
+          'AppNativa',
       },
-      draft: true,
+      prerelease: false,
+      // Drafts are invisible to electron-updater. CI sets GITHUB_RELEASE_DRAFT=false on tags.
+      draft: process.env.GITHUB_RELEASE_DRAFT !== 'false',
     }),
   ],
   plugins: [new AutoUnpackNativesPlugin({})],
+  hooks: {
+    postMake: async (_config, makeResults) => generateUpdateManifests(_config, makeResults),
+  },
 };
 
 export default config;
