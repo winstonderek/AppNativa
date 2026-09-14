@@ -8,6 +8,10 @@ function getUpdateExePath(): string {
   return path.resolve(path.dirname(process.execPath), '..', 'Update.exe');
 }
 
+export function isSquirrelInstall(): boolean {
+  return process.platform === 'win32' && fs.existsSync(getUpdateExePath());
+}
+
 function runUpdateExe(args: string[]): void {
   const updateExe = getUpdateExePath();
   if (!fs.existsSync(updateExe)) {

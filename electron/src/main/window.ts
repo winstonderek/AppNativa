@@ -22,6 +22,7 @@ import { setupDownloads } from './downloads';
 import { setupExternalLinkHandlers, setupNavigationHandlers } from './external-links';
 import { setupContextMenu } from './context-menu';
 import { logger, isDevelopment } from './logger';
+import { checkForUpdatesManually } from './updater';
 
 type WindowState = ReturnType<typeof windowStateKeeper>;
 
@@ -456,6 +457,10 @@ export function buildApplicationMenu(): void {
             label: APP_NAME,
             submenu: [
               { role: 'about' as const },
+              {
+                label: 'Check for Updates…',
+                click: () => checkForUpdatesManually(),
+              },
               { type: 'separator' as const },
               { role: 'services' as const },
               { type: 'separator' as const },
@@ -534,6 +539,11 @@ export function buildApplicationMenu(): void {
     template.push({
       label: 'Help',
       submenu: [
+        {
+          label: 'Check for Updates…',
+          click: () => checkForUpdatesManually(),
+        },
+        { type: 'separator' },
         {
           label: `${APP_NAME} Support`,
           click: () => {

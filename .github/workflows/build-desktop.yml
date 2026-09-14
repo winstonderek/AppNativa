@@ -23,11 +23,43 @@ jobs:
           cache: npm
           cache-dependency-path: electron/package-lock.json
 
+      - name: Verify tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag v$TAG does not match electron/package.json version $PKG"
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm install
 
       - name: Lint (TypeScript)
         run: npm run lint
+
+      - name: Import Apple signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "APPLE_CERTIFICATE is not set; macOS signing will be skipped."
+            exit 0
+          fi
+          CERTIFICATE_PATH="$RUNNER_TEMP/build_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | tr -d '"')
+          rm -f "$CERTIFICATE_PATH"
 
       - name: Package macOS
         run: npm run make
@@ -42,9 +74,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pynn-macos
-          path: |
-            electron/out/make/**/*.dmg
-            electron/out/make/**/*.zip
+          path: electron/out/make
 
   build-windows:
     runs-on: windows-latest
@@ -60,23 +90,76 @@ jobs:
           cache: npm
           cache-dependency-path: electron/package-lock.json
 
+      - name: Verify tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag v$TAG does not match electron/package.json version $PKG"
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm install
 
       - name: Lint (TypeScript)
         run: npm run lint
 
+      - name: Decode Windows signing certificate
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) {
+            Write-Host "WINDOWS_CERTIFICATE is not set; Windows signing will be skipped."
+            exit 0
+          }
+          $path = Join-Path $env:RUNNER_TEMP "windows-cert.pfx"
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          [IO.File]::WriteAllBytes($path, $bytes)
+          Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_CERTIFICATE_FILE=$path"
+
       - name: Package Windows
         run: npm run make:win
         env:
           SQUIRREL_ICON_URL: ${{ secrets.SQUIRREL_ICON_URL }}
-          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_FILE: ${{ env.WINDOWS_CERTIFICATE_FILE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pynn-windows
-          path: |
-            electron/out/make/**/*.exe
-            electron/out/make/**/*.zip
+          path: electron/out/make
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/**/*.dmg
+            release-assets/**/*.zip
+            release-assets/**/*.exe
+            release-assets/**/*.nupkg
+            release-assets/**/*.yml
+            release-assets/**/RELEASES
