@@ -5,6 +5,7 @@ import {
   PROTOCOL_SCHEME,
   SAFE_WEB_PROTOCOLS,
   STRIPE_CHECKOUT_HOSTS,
+  TALKS_PATH,
 } from './constants';
 
 export type UrlClassification =
@@ -133,6 +134,48 @@ export function resolveInAppNotificationUrl(raw: string | undefined | null): str
   }
 
   return isAllowedMainNavigation(trimmed) ? trimmed : null;
+}
+
+/**
+ * Resolves a Talks in-app path to a URL that is safe to load in a desktop
+ * window. Accepts `/agentic/talks` plus query/hash, or an absolute primary-host
+ * Talks URL. Anything else is rejected.
+ */
+export function resolveTalksAppUrl(raw?: string | null): string | null {
+  const base = APP_URL.replace(/\/$/, '');
+  const fallback = `${base}${TALKS_PATH}`;
+
+  if (raw == null || raw.trim() === '') {
+    return fallback;
+  }
+
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('//') || trimmed.includes('\\')) {
+    return null;
+  }
+
+  const resolved = trimmed.startsWith('/')
+    ? parseUrl(`${base}${trimmed}`)
+    : parseUrl(trimmed);
+
+  if (!resolved || !isPrimaryHost(resolved.hostname)) {
+    return null;
+  }
+
+  const path = resolved.pathname.replace(/\/+$/, '') || '/';
+  if (path !== TALKS_PATH && !path.startsWith(`${TALKS_PATH}/`)) {
+    return null;
+  }
+
+  return resolved.href;
+}
+
+/** True when `url` is already a Talks page on the primary host. */
+export function isTalksAppUrl(url: string): boolean {
+  const parsed = parseUrl(url);
+  if (!parsed || !isPrimaryHost(parsed.hostname)) return false;
+  const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  return path === TALKS_PATH || path.startsWith(`${TALKS_PATH}/`);
 }
 
 export function deepLinkToAppUrl(deepLink: string): string {
