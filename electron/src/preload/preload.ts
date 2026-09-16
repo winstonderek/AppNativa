@@ -17,6 +17,7 @@ const CHANNEL_CALL_GET_PENDING = 'pynn:call-get-pending';
 const CHANNEL_CALL_CONNECTED = 'pynn:call-connected';
 const CHANNEL_CALL_ENDED = 'pynn:call-ended';
 const CHANNEL_CALLS_SUPPRESSED = 'pynn:calls-suppressed';
+const CHANNEL_TALKS_OPEN = 'pynn:talks-open';
 const CHANNEL_UNREAD_COUNT = 'pynn:unread-count';
 const CHANNEL_SHOW_NOTIFICATION = 'pynn:show-notification';
 const CHANNEL_JS_ALERT = 'pynn:js-alert';
@@ -85,6 +86,12 @@ contextBridge.exposeInMainWorld('pynnDesktop', {
 
   /** The call is over: close the floating call window. */
   notifyCallEnded: () => ipcRenderer.send(CHANNEL_CALL_ENDED),
+
+  /**
+   * Open Talks in a window covering the left 50% of the display.
+   * Pass a Talks path such as `/agentic/talks` (query string allowed).
+   */
+  openTalksWindow: (path?: string) => ipcRenderer.invoke(CHANNEL_TALKS_OPEN, path),
 
   /** Unread in-app notification count for the dock / taskbar badge. */
   setUnreadCount: (count: number) => ipcRenderer.send(CHANNEL_UNREAD_COUNT, count),

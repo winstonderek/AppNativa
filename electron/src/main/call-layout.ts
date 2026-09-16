@@ -4,10 +4,13 @@ import {
   IPC_CHANNELS,
   MIN_CALL_WINDOW_HEIGHT,
   MIN_CALL_WINDOW_WIDTH,
+  MIN_TALKS_WINDOW_HEIGHT,
+  MIN_TALKS_WINDOW_WIDTH,
+  MIN_WINDOW_WIDTH,
 } from '../shared/constants';
-import { isPrimaryHost } from '../shared/url-utils';
+import { isPrimaryHost, isTalksAppUrl, resolveTalksAppUrl } from '../shared/url-utils';
 import { logger } from './logger';
-import { createAppWindow, getMainWindow, getWindowRole } from './window';
+import { createAppWindow, getMainWindow, getWindowRole, loadAppUrl } from './window';
 
 export interface PendingCallSession {
   callId: string;
@@ -32,6 +35,7 @@ interface ActiveLayout {
 
 let active: ActiveLayout | null = null;
 let pendingCall: PendingCallSession | null = null;
+let talksWindow: BrowserWindow | null = null;
 
 function isTrustedSender(contents: WebContents): boolean {
   try {
@@ -44,6 +48,68 @@ function isTrustedSender(contents: WebContents): boolean {
 function sendSuppression(window: BrowserWindow, suppressed: boolean): void {
   if (window.isDestroyed()) return;
   window.webContents.send(IPC_CHANNELS.callsSuppressed, suppressed);
+}
+
+function sendSuppressionToTalks(suppressed: boolean): void {
+  if (!talksWindow || talksWindow.isDestroyed()) return;
+  sendSuppression(talksWindow, suppressed);
+  talksWindow.setAlwaysOnTop(suppressed);
+}
+
+function talksWindowBounds(fromWindow: BrowserWindow): Electron.Rectangle {
+  const { workArea } = screen.getDisplayMatching(fromWindow.getBounds());
+  const width = Math.max(MIN_TALKS_WINDOW_WIDTH, Math.floor(workArea.width * 0.5));
+  return {
+    x: workArea.x,
+    y: workArea.y,
+    width: Math.min(width, workArea.width),
+    height: workArea.height,
+  };
+}
+
+/**
+ * Opens Talks in a window covering the left 50% of the same display as the
+ * call (or the window that asked). Re-focuses an existing Talks window.
+ */
+function openTalksWindow(fromWindow: BrowserWindow, path?: string | null): boolean {
+  const url = resolveTalksAppUrl(path);
+  if (!url) return false;
+
+  if (talksWindow && !talksWindow.isDestroyed()) {
+    const current = talksWindow.webContents.getURL();
+    if (!isTalksAppUrl(current)) {
+      loadAppUrl(talksWindow, url);
+    }
+    if (active) talksWindow.setAlwaysOnTop(true);
+    if (talksWindow.isMinimized()) talksWindow.restore();
+    talksWindow.show();
+    talksWindow.focus();
+    return true;
+  }
+
+  const bounds = talksWindowBounds(fromWindow);
+  talksWindow = createAppWindow({
+    role: 'talks',
+    initialUrl: url,
+    bounds,
+    minWidth: Math.min(MIN_WINDOW_WIDTH, bounds.width),
+    minHeight: Math.min(MIN_TALKS_WINDOW_HEIGHT, bounds.height),
+    alwaysOnTop: active !== null,
+    callsSuppressed: active !== null,
+    becomeMain: false,
+  });
+
+  talksWindow.on('closed', () => {
+    talksWindow = null;
+  });
+
+  talksWindow.webContents.on('did-finish-load', () => {
+    if (!talksWindow || talksWindow.isDestroyed()) return;
+    sendSuppression(talksWindow, active !== null);
+  });
+
+  logger.info('Talks window opened at 50% of the work area');
+  return true;
 }
 
 function isPendingCallSession(value: unknown): value is PendingCallSession {
@@ -103,6 +169,7 @@ function openCallWindow(workspaceWindow: BrowserWindow, session: PendingCallSess
 
   active = { workspaceWindow, callWindow };
   sendSuppression(workspaceWindow, true);
+  sendSuppressionToTalks(true);
   watchLayout(active);
   logger.info('Call window opened at 50% × 75% of the work area');
   return true;
@@ -146,6 +213,7 @@ function exitCallLayout(reason: string): void {
   if (workspaceWindow && !workspaceWindow.isDestroyed()) {
     sendSuppression(workspaceWindow, false);
   }
+  sendSuppressionToTalks(false);
 
   if (!callWindow.isDestroyed()) {
     callWindow.close();
@@ -198,6 +266,16 @@ export function setupCallLayoutHandlers(): void {
     if (window !== active.callWindow && window !== active.workspaceWindow) return;
 
     exitCallLayout('call ended');
+  });
+
+  ipcMain.handle(IPC_CHANNELS.talksOpen, (event, path: unknown) => {
+    if (!isTrustedSender(event.sender)) return false;
+
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return false;
+
+    const talksPath = typeof path === 'string' ? path : null;
+    return openTalksWindow(window, talksPath);
   });
 
   logger.debug('Call layout handlers configured');

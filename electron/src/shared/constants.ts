@@ -33,7 +33,12 @@ export const MIN_WINDOW_HEIGHT = 600;
 export const MIN_CALL_WINDOW_WIDTH = 480;
 export const MIN_CALL_WINDOW_HEIGHT = 400;
 
-export type WindowRole = 'main' | 'workspace' | 'call' | 'popup' | 'checkout';
+/** Talks opened from a call covers the left half of the display. */
+export const MIN_TALKS_WINDOW_WIDTH = 480;
+export const MIN_TALKS_WINDOW_HEIGHT = 400;
+export const TALKS_PATH = '/agentic/talks';
+
+export type WindowRole = 'main' | 'workspace' | 'call' | 'talks' | 'popup' | 'checkout';
 
 /**
  * Hosted Stripe surfaces that should stay inside the desktop app instead of
@@ -57,6 +62,8 @@ export const IPC_CHANNELS = {
   callEnded: 'pynn:call-ended',
   /** Main → renderer: this window must not render call UI right now. */
   callsSuppressed: 'pynn:calls-suppressed',
+  /** Renderer → main: open Talks in a window covering 50% of the display. */
+  talksOpen: 'pynn:talks-open',
   /** Renderer → main: unread in-app notification count for the dock/taskbar badge. */
   unreadCount: 'pynn:unread-count',
   /** Renderer → main: show a native OS notification when the app is in the background. */

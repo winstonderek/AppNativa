@@ -1,7 +1,7 @@
 {
   "name": "pynn-desktop",
   "productName": "Pynn",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Official Pynn desktop client",
   "main": "dist/main/main.js",
   "author": "Pynn",
