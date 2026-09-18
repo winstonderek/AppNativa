@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
@@ -19,12 +19,17 @@ function runUpdateExe(args: string[]): void {
     return;
   }
 
-  const child = spawn(updateExe, args, {
-    detached: true,
-    stdio: 'ignore',
+  // Must wait — a detached 1s timeout often quits before shortcuts (and their
+  // icons) are rewritten, which blanks the taskbar pin after an update.
+  const result = spawnSync(updateExe, args, {
     windowsHide: true,
+    timeout: 15_000,
   });
-  child.unref();
+  if (result.error) {
+    logger.warn(`Squirrel Update.exe ${args.join(' ')} failed`, result.error);
+  } else if (result.status !== 0) {
+    logger.warn(`Squirrel Update.exe ${args.join(' ')} exited ${result.status}`);
+  }
 }
 
 /**
@@ -46,11 +51,11 @@ export function handleSquirrelWindowsEvents(): boolean {
     case '--squirrel-install':
     case '--squirrel-updated':
       runUpdateExe([`--createShortcut=${exeName}`]);
-      setTimeout(() => app.quit(), 1000);
+      app.quit();
       return true;
     case '--squirrel-uninstall':
       runUpdateExe([`--removeShortcut=${exeName}`]);
-      setTimeout(() => app.quit(), 1000);
+      app.quit();
       return true;
     case '--squirrel-obsolete':
       app.quit();

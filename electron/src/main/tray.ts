@@ -70,6 +70,13 @@ export function getTray(): Tray | null {
   return tray;
 }
 
+/** Remove the tray so macOS can actually quit (needed for update install). */
+export function destroyTray(): void {
+  if (!tray) return;
+  tray.destroy();
+  tray = null;
+}
+
 /** Architecture hook for minimize-to-tray — not enabled by default. */
 export function setMinimizeToTray(enabled: boolean): void {
   logger.debug(`Minimize to tray preference: ${enabled}`);

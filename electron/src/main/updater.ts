@@ -1,4 +1,4 @@
-import { autoUpdater as squirrelUpdater, dialog } from 'electron';
+import { app, autoUpdater as squirrelUpdater, BrowserWindow, dialog } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import {
   APP_NAME,
@@ -7,11 +7,65 @@ import {
 } from '../shared/constants';
 import { logger, isDevelopment } from './logger';
 import { isSquirrelInstall } from './squirrel';
+import { destroyTray } from './tray';
 
 const GITHUB_LATEST_DOWNLOAD_URL = `https://github.com/${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO}/releases/latest/download`;
 
 let initialized = false;
 let isManualCheck = false;
+let installingUpdate = false;
+
+export function isInstallingUpdate(): boolean {
+  return installingUpdate;
+}
+
+/**
+ * quitAndInstall is a no-op on macOS if a tray is open, windows stay alive,
+ * or the old process still holds the single-instance lock (the relaunched
+ * app then exits immediately).
+ */
+function prepareAppToQuitForUpdate(): void {
+  installingUpdate = true;
+  app.removeAllListeners('window-all-closed');
+  destroyTray();
+
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.removeAllListeners('close');
+    window.destroy();
+  }
+
+  if (app.hasSingleInstanceLock()) {
+    app.releaseSingleInstanceLock();
+  }
+}
+
+function installDownloadedUpdate(): void {
+  logger.info('Installing downloaded update');
+  prepareAppToQuitForUpdate();
+
+  // Wait until the message box is fully dismissed; calling quitAndInstall
+  // in the same tick is a known no-op on macOS.
+  setImmediate(() => {
+    try {
+      if (isSquirrelInstall()) {
+        squirrelUpdater.quitAndInstall();
+      } else {
+        autoUpdater.quitAndInstall(false, true);
+      }
+    } catch (error) {
+      logger.error('quitAndInstall failed', error);
+    }
+
+    app.quit();
+
+    const forceExit = setTimeout(() => {
+      logger.warn('Update install did not quit in time; forcing exit');
+      app.exit(0);
+    }, 1500);
+
+    app.once('will-quit', () => clearTimeout(forceExit));
+  });
+}
 
 function showRestartDialog(version?: string): void {
   dialog
@@ -28,11 +82,7 @@ function showRestartDialog(version?: string): void {
     })
     .then(({ response }) => {
       if (response !== 0) return;
-      if (isSquirrelInstall()) {
-        squirrelUpdater.quitAndInstall();
-        return;
-      }
-      autoUpdater.quitAndInstall();
+      installDownloadedUpdate();
     })
     .catch((err) => logger.error('Install dialog failed', err));
 }

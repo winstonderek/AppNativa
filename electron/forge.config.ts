@@ -69,9 +69,11 @@ const config: ForgeConfig = {
       name: 'Pynn',
       setupExe: 'Pynn-Setup.exe',
       setupIcon: path.resolve(__dirname, 'assets', 'icon.ico'),
-      // Squirrel requires HTTPS iconUrl for shortcuts; set after pushing to GitHub:
-      // SQUIRREL_ICON_URL=https://raw.githubusercontent.com/<owner>/<repo>/main/electron/assets/icon.ico
-      ...(process.env.SQUIRREL_ICON_URL ? { iconUrl: process.env.SQUIRREL_ICON_URL } : {}),
+      // Squirrel downloads this into shortcuts (Start Menu / desktop / taskbar).
+      // Without it, pins go blank after an update when the old app-* folder is deleted.
+      iconUrl:
+        process.env.SQUIRREL_ICON_URL ||
+        'https://raw.githubusercontent.com/winstonderek/AppNativa/main/electron/assets/icon.ico',
       ...(windowsSign
         ? {
             certificateFile: windowsCertificateFile!,

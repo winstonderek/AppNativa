@@ -131,69 +131,162 @@ function getStartMenuShortcutPath(): string {
   );
 }
 
+/** Copy the packaged .ico next to Update.exe so shortcuts survive app-* folder deletion. */
+function getWindowsShortcutIconPath(): string {
+  const packagedIco = getNotificationIconPath();
+  const updateExe = getSquirrelUpdateExe();
+  const stableDir = updateExe ? path.dirname(updateExe) : path.dirname(process.execPath);
+  const stableIco = path.join(stableDir, 'app.ico');
+
+  if (packagedIco) {
+    try {
+      const data = fs.readFileSync(packagedIco);
+      if (!fs.existsSync(stableIco) || fs.statSync(stableIco).size !== data.length) {
+        fs.writeFileSync(stableIco, data);
+      }
+      return stableIco;
+    } catch (error) {
+      logger.debug('Could not copy a stable Windows shortcut icon', error);
+    }
+  }
+
+  return process.execPath;
+}
+
+function listLnkFiles(dir: string, depth = 0): string[] {
+  if (depth > 2 || !fs.existsSync(dir)) return [];
+  try {
+    const out: string[] = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        out.push(...listLnkFiles(full, depth + 1));
+      } else if (entry.name.toLowerCase().endsWith('.lnk')) {
+        out.push(full);
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function discoverWindowsShortcutPaths(): string[] {
+  const appData = app.getPath('appData');
+  const paths = new Set<string>([
+    getStartMenuShortcutPath(),
+    path.join(app.getPath('desktop'), `${APP_NAME}.lnk`),
+  ]);
+
+  for (const dir of [
+    path.join(appData, 'Microsoft', 'Internet Explorer', 'Quick Launch', 'User Pinned', 'TaskBar'),
+    path.join(appData, 'Microsoft', 'Internet Explorer', 'Quick Launch', 'User Pinned', 'ImplicitAppShortcuts'),
+  ]) {
+    for (const lnk of listLnkFiles(dir)) {
+      paths.add(lnk);
+    }
+  }
+
+  return [...paths];
+}
+
+function isPynnShortcut(details: Electron.ShortcutDetails, aumid: string): boolean {
+  if (details.appUserModelId === aumid) return true;
+
+  const target = (details.target ?? '').replace(/\//g, '\\').toLowerCase();
+  const updateExe = getSquirrelUpdateExe()?.replace(/\//g, '\\').toLowerCase();
+  const execPath = process.execPath.replace(/\//g, '\\').toLowerCase();
+
+  if (updateExe && target === updateExe) return true;
+  if (target === execPath) return true;
+  return target.endsWith('\\pynn.exe') && target.includes('\\pynn\\');
+}
+
+function samePath(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  return path.normalize(a).toLowerCase() === path.normalize(b).toLowerCase();
+}
+
 /**
- * Windows toasts only appear when a Start Menu shortcut exists with the same
- * AppUserModelID (and ToastActivatorCLSID) as the running process. Squirrel
- * writes one on install; ZIP / older installs may not have a matching one.
+ * Windows toasts need a Start Menu shortcut with a matching AppUserModelID.
+ * After a Squirrel update the old app-* folder is deleted, so taskbar/desktop
+ * pins keep a dead icon path until we rewrite them.
  */
-function ensureWindowsStartMenuShortcut(aumid: string): void {
-  const shortcutPath = getStartMenuShortcutPath();
+function ensureWindowsShortcuts(aumid: string): void {
   const updateExe = getSquirrelUpdateExe();
   const fallbackTarget = updateExe ?? process.execPath;
-  const icon = getNotificationIconPath();
+  const icon = getWindowsShortcutIconPath();
   const clsid = (app as Electron.App & { toastActivatorCLSID?: string }).toastActivatorCLSID;
+  const processStartArgs = `--processStart=${path.basename(process.execPath)}`;
 
-  const next: Electron.ShortcutDetails = {
-    target: fallbackTarget,
-    cwd: path.dirname(fallbackTarget),
-    description: APP_NAME,
-    appUserModelId: aumid,
-    ...(icon ? { icon, iconIndex: 0 } : {}),
-    ...(clsid ? { toastActivatorClsid: clsid } : {}),
-  };
+  for (const shortcutPath of discoverWindowsShortcutPaths()) {
+    const isStartMenu = samePath(shortcutPath, getStartMenuShortcutPath());
+    const exists = fs.existsSync(shortcutPath);
+    if (!exists && !isStartMenu) continue;
 
-  try {
-    fs.mkdirSync(path.dirname(shortcutPath), { recursive: true });
+    const next: Electron.ShortcutDetails = {
+      target: fallbackTarget,
+      cwd: path.dirname(fallbackTarget),
+      description: APP_NAME,
+      appUserModelId: aumid,
+      icon,
+      iconIndex: 0,
+      ...(updateExe ? { args: processStartArgs } : {}),
+      ...(clsid ? { toastActivatorClsid: clsid } : {}),
+    };
 
-    if (fs.existsSync(shortcutPath)) {
-      try {
-        const current = shell.readShortcutLink(shortcutPath);
-        const sameId = current.appUserModelId === aumid;
-        const sameClsid = !clsid || current.toastActivatorClsid === clsid;
-        if (sameId && sameClsid) {
-          logger.debug(`Windows notification shortcut already registered: ${aumid}`);
-          return;
+    try {
+      if (exists) {
+        try {
+          const current = shell.readShortcutLink(shortcutPath);
+          if (!isStartMenu && !isPynnShortcut(current, aumid)) continue;
+
+          const liveTarget = current.target && fs.existsSync(current.target) ? current.target : fallbackTarget;
+          next.target = liveTarget;
+          next.cwd = current.cwd || path.dirname(liveTarget);
+          if (current.args) {
+            next.args = current.args;
+          } else if (updateExe && samePath(liveTarget, updateExe)) {
+            next.args = processStartArgs;
+          } else {
+            delete next.args;
+          }
+
+          const sameId = current.appUserModelId === aumid;
+          const sameClsid = !clsid || current.toastActivatorClsid === clsid;
+          const sameIcon = samePath(current.icon, icon) && fs.existsSync(icon);
+          const sameTarget = samePath(current.target, next.target);
+          if (sameId && sameClsid && sameIcon && sameTarget) continue;
+        } catch {
+          logger.debug(`Existing shortcut could not be read: ${shortcutPath}`);
         }
-        if (current.target) {
-          next.target = current.target;
-          next.cwd = current.cwd || path.dirname(current.target);
+
+        fs.mkdirSync(path.dirname(shortcutPath), { recursive: true });
+        if (!shell.writeShortcutLink(shortcutPath, 'replace', next)) {
+          throw new Error('writeShortcutLink(replace) returned false');
         }
-        if (current.args) next.args = current.args;
-      } catch {
-        logger.debug('Existing Start Menu shortcut could not be read; replacing it');
+      } else {
+        fs.mkdirSync(path.dirname(shortcutPath), { recursive: true });
+        if (!shell.writeShortcutLink(shortcutPath, 'create', next)) {
+          throw new Error('writeShortcutLink(create) returned false');
+        }
       }
 
-      if (!shell.writeShortcutLink(shortcutPath, 'replace', next)) {
-        throw new Error('writeShortcutLink(replace) returned false');
-      }
-    } else if (!shell.writeShortcutLink(shortcutPath, 'create', next)) {
-      throw new Error('writeShortcutLink(create) returned false');
+      logger.info(`Windows shortcut ready (${path.basename(shortcutPath)}, ${aumid})`);
+    } catch (error) {
+      logger.warn(`Failed to register Windows shortcut ${shortcutPath}`, error);
     }
-
-    logger.info(`Windows notification shortcut ready (${aumid})`);
-  } catch (error) {
-    logger.warn('Failed to register Windows notification shortcut', error);
   }
 }
 
 /**
- * After `ready`: keep AUMID set and make sure the Start Menu shortcut matches.
+ * After `ready`: keep AUMID set and make sure shortcuts still have a live icon.
  * Safe to call on every launch.
  */
 export function applyWindowsNotificationIdentity(): void {
   if (process.platform !== 'win32') return;
   applyWindowsAppUserModelId();
-  ensureWindowsStartMenuShortcut(getWindowsAppUserModelId());
+  ensureWindowsShortcuts(getWindowsAppUserModelId());
 }
 
 function focusAndNavigate(url: string | null): void {

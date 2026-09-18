@@ -23,7 +23,7 @@ import { logger } from './logger';
 import { setupPermissions } from './permissions';
 import { handleSquirrelWindowsEvents } from './squirrel';
 import { setupTray } from './tray';
-import { setupAutoUpdater } from './updater';
+import { isInstallingUpdate, setupAutoUpdater } from './updater';
 import {
   buildApplicationMenu,
   createMainWindow,
@@ -93,6 +93,7 @@ if (handleSquirrelWindowsEvents()) {
       setupAutoUpdater();
 
       app.on('activate', () => {
+        if (isInstallingUpdate()) return;
         if (BrowserWindow.getAllWindows().length === 0) {
           createMainWindow();
         } else {
@@ -104,7 +105,7 @@ if (handleSquirrelWindowsEvents()) {
     });
 
     app.on('window-all-closed', () => {
-      if (process.platform !== 'darwin') {
+      if (process.platform !== 'darwin' || isInstallingUpdate()) {
         app.quit();
       }
     });
