@@ -23,7 +23,7 @@ import { logger } from './logger';
 import { setupPermissions } from './permissions';
 import { handleSquirrelWindowsEvents } from './squirrel';
 import { setupTray } from './tray';
-import { isInstallingUpdate, setupAutoUpdater } from './updater';
+import { handoffToUpdatedWindowsInstall, isInstallingUpdate, setupAutoUpdater } from './updater';
 import {
   buildApplicationMenu,
   createMainWindow,
@@ -32,6 +32,8 @@ import {
 
 if (handleSquirrelWindowsEvents()) {
   // Squirrel.Windows asked this process to create/remove shortcuts and quit.
+} else if (handoffToUpdatedWindowsInstall()) {
+  // A newer installed build is already on disk. Quit so that copy can start.
 } else {
   applyWindowsAppUserModelId();
 

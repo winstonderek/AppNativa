@@ -42,6 +42,34 @@ function isMacUpdateArtifact(artifact: string): boolean {
   return artifact.endsWith('.zip');
 }
 
+function stripUtf8Bom(filePath: string): void {
+  const data = fs.readFileSync(filePath);
+  if (data.length < 3 || data[0] !== 0xef || data[1] !== 0xbb || data[2] !== 0xbf) return;
+  fs.writeFileSync(filePath, data.subarray(3));
+}
+
+/**
+ * electron-winstaller writes RELEASES as UTF-8 with a BOM. Squirrel's checksum
+ * parser can treat that prefix as part of the hash and refuse to settle on the
+ * installed package.
+ */
+function stripReleaseManifestBoms(
+  makeResults: ReadonlyArray<{ artifacts: readonly string[] }>,
+): void {
+  const seen = new Set<string>();
+  for (const result of makeResults) {
+    for (const artifact of result.artifacts) {
+      const candidates = [artifact, path.join(path.dirname(artifact), 'RELEASES')];
+      for (const candidate of candidates) {
+        if (path.basename(candidate) !== 'RELEASES' || seen.has(candidate)) continue;
+        if (!fs.existsSync(candidate)) continue;
+        seen.add(candidate);
+        stripUtf8Bom(candidate);
+      }
+    }
+  }
+}
+
 function isWinUpdateArtifact(artifact: string): boolean {
   const name = path.basename(artifact).toLowerCase();
   return name.endsWith('.exe') && !name.includes('uninstall');
@@ -79,6 +107,8 @@ export const generateUpdateManifests: ForgeHookMap['postMake'] = async (
       });
     }
   }
+
+  stripReleaseManifestBoms(makeResults);
 
   if (!files.length) return makeResults;
 

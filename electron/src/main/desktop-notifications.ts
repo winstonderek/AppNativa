@@ -241,22 +241,23 @@ function ensureWindowsShortcuts(aumid: string): void {
           const current = shell.readShortcutLink(shortcutPath);
           if (!isStartMenu && !isPynnShortcut(current, aumid)) continue;
 
-          const liveTarget = current.target && fs.existsSync(current.target) ? current.target : fallbackTarget;
-          next.target = liveTarget;
-          next.cwd = current.cwd || path.dirname(liveTarget);
-          if (current.args) {
-            next.args = current.args;
-          } else if (updateExe && samePath(liveTarget, updateExe)) {
-            next.args = processStartArgs;
-          } else {
-            delete next.args;
+          // Keep pins on Update.exe. A shortcut aimed at app-<old>\pynn.exe
+          // relaunches that build after an update, so the prompt comes back.
+          if (!updateExe) {
+            const liveTarget =
+              current.target && fs.existsSync(current.target) ? current.target : fallbackTarget;
+            next.target = liveTarget;
+            next.cwd = current.cwd || path.dirname(liveTarget);
+            if (current.args) next.args = current.args;
+            else delete next.args;
           }
 
           const sameId = current.appUserModelId === aumid;
           const sameClsid = !clsid || current.toastActivatorClsid === clsid;
           const sameIcon = samePath(current.icon, icon) && fs.existsSync(icon);
           const sameTarget = samePath(current.target, next.target);
-          if (sameId && sameClsid && sameIcon && sameTarget) continue;
+          const sameArgs = (current.args ?? '') === (next.args ?? '');
+          if (sameId && sameClsid && sameIcon && sameTarget && sameArgs) continue;
         } catch {
           logger.debug(`Existing shortcut could not be read: ${shortcutPath}`);
         }

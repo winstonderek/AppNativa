@@ -1,10 +1,16 @@
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { app, autoUpdater as squirrelUpdater, BrowserWindow, dialog } from 'electron';
-import { autoUpdater } from 'electron-updater';
+import { autoUpdater, type UpdateDownloadedEvent } from 'electron-updater';
 import {
   APP_NAME,
   GITHUB_UPDATE_OWNER,
   GITHUB_UPDATE_REPO,
+  WINDOWS_SQUIRREL_EXE_NAME,
+  WINDOWS_SQUIRREL_PACKAGE_ID,
 } from '../shared/constants';
+import { isNewerVersion } from '../shared/version';
 import { logger, isDevelopment } from './logger';
 import { isSquirrelInstall } from './squirrel';
 import { destroyTray } from './tray';
@@ -14,6 +20,10 @@ const GITHUB_LATEST_DOWNLOAD_URL = `https://github.com/${GITHUB_UPDATE_OWNER}/${
 let initialized = false;
 let isManualCheck = false;
 let installingUpdate = false;
+let windowsSetupSpawned = false;
+let pendingWindowsSetup: { version: string; filePath: string } | null = null;
+
+const WINDOWS_SETUP_MARKER = 'windows-setup-launched.json';
 
 export function isInstallingUpdate(): boolean {
   return installingUpdate;
@@ -39,6 +49,110 @@ function prepareAppToQuitForUpdate(): void {
   }
 }
 
+function spawnDetached(exe: string, args: string[]): void {
+  const child = spawn(exe, args, {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+}
+
+function windowsSetupMarkerPath(): string {
+  return path.join(app.getPath('userData'), WINDOWS_SETUP_MARKER);
+}
+
+function setupAlreadyLaunched(version: string): boolean {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(windowsSetupMarkerPath(), 'utf8')) as {
+      version?: string;
+    };
+    return parsed.version === version;
+  } catch {
+    return false;
+  }
+}
+
+function markSetupLaunched(version: string): void {
+  try {
+    const file = windowsSetupMarkerPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ version }));
+  } catch (error) {
+    logger.warn('Could not record Windows setup launch', error);
+  }
+}
+
+/**
+ * latest.yml points at Squirrel's Setup.exe. electron-updater launches that
+ * file with NSIS flags, which this installer ignores, so the running copy
+ * never changes version and the prompt returns on the next launch.
+ */
+function launchPendingWindowsSetup(force: boolean): void {
+  if (!pendingWindowsSetup || windowsSetupSpawned) return;
+  if (!force && setupAlreadyLaunched(pendingWindowsSetup.version)) return;
+  if (!fs.existsSync(pendingWindowsSetup.filePath)) return;
+
+  windowsSetupSpawned = true;
+  spawnDetached(pendingWindowsSetup.filePath, []);
+  markSetupLaunched(pendingWindowsSetup.version);
+  logger.info(`Started Windows installer for ${pendingWindowsSetup.version}`);
+}
+
+function newestInstalledVersion(root: string): string | null {
+  let newest: string | null = null;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^app-/i.test(entry.name)) continue;
+    const version = entry.name.replace(/^app-/i, '');
+    if (!newest || isNewerVersion(version, newest)) newest = version;
+  }
+  return newest;
+}
+
+function squirrelInstallRoot(): string | null {
+  if (process.platform !== 'win32' || !app.isPackaged) return null;
+
+  if (isSquirrelInstall()) {
+    return path.resolve(path.dirname(process.execPath), '..');
+  }
+
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) return null;
+  const root = path.join(localAppData, WINDOWS_SQUIRREL_PACKAGE_ID);
+  return fs.existsSync(path.join(root, 'Update.exe')) ? root : null;
+}
+
+/**
+ * Squirrel keeps every version in its own app-* folder. Shortcuts and the
+ * portable zip keep launching the old folder, so the update prompt returns
+ * even though the new build is already installed. Start the newest one instead.
+ */
+export function handoffToUpdatedWindowsInstall(): boolean {
+  const root = squirrelInstallRoot();
+  if (!root) return false;
+
+  const newest = newestInstalledVersion(root);
+  if (!newest || !isNewerVersion(newest, app.getVersion())) return false;
+
+  const installedExe = path.join(root, `app-${newest}`, `${WINDOWS_SQUIRREL_EXE_NAME}.exe`);
+  const updateExe = path.join(root, 'Update.exe');
+  if (!fs.existsSync(installedExe) || !fs.existsSync(updateExe)) return false;
+
+  logger.info(`Opening installed ${APP_NAME} ${newest} instead of ${app.getVersion()}`);
+  spawnDetached(updateExe, ['--processStart', WINDOWS_SQUIRREL_EXE_NAME]);
+  setImmediate(() => {
+    app.quit();
+  });
+  return true;
+}
+
 function installDownloadedUpdate(): void {
   logger.info('Installing downloaded update');
   prepareAppToQuitForUpdate();
@@ -47,8 +161,12 @@ function installDownloadedUpdate(): void {
   // in the same tick is a known no-op on macOS.
   setImmediate(() => {
     try {
-      if (isSquirrelInstall()) {
-        squirrelUpdater.quitAndInstall();
+      if (process.platform === 'win32' && isSquirrelInstall()) {
+        // quitAndInstall uses --processStartAndWait, which dies with this process.
+        const updateExe = path.resolve(path.dirname(process.execPath), '..', 'Update.exe');
+        spawnDetached(updateExe, ['--processStart', path.basename(process.execPath)]);
+      } else if (process.platform === 'win32') {
+        launchPendingWindowsSetup(true);
       } else {
         autoUpdater.quitAndInstall(false, true);
       }
@@ -57,6 +175,8 @@ function installDownloadedUpdate(): void {
     }
 
     app.quit();
+
+    if (process.platform !== 'darwin') return;
 
     const forceExit = setTimeout(() => {
       logger.warn('Update install did not quit in time; forcing exit');
@@ -114,10 +234,16 @@ function setupSquirrelUpdater(): void {
     }
   });
 
-  squirrelUpdater.on('update-downloaded', () => {
-    logger.info('Squirrel update downloaded');
+  squirrelUpdater.on('update-downloaded', (_event, _releaseNotes, releaseName) => {
+    const version = typeof releaseName === 'string' ? releaseName : undefined;
+    if (version && !isNewerVersion(version, app.getVersion())) {
+      logger.info(`Already running ${app.getVersion()}; ignoring Squirrel update ${version}`);
+      isManualCheck = false;
+      return;
+    }
+    logger.info(`Squirrel update downloaded${version ? `: ${version}` : ''}`);
     isManualCheck = false;
-    showRestartDialog();
+    showRestartDialog(version);
   });
 
   squirrelUpdater.on('error', (error) => {
@@ -131,7 +257,15 @@ function setupSquirrelUpdater(): void {
 
 function setupElectronUpdater(): void {
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // Windows artifacts are Squirrel setup files, not NSIS. Silent install-on-quit
+  // passes NSIS flags and leaves the old app in place.
+  autoUpdater.autoInstallOnAppQuit = process.platform !== 'win32';
+  if (process.platform === 'win32') {
+    app.on('before-quit', () => {
+      if (installingUpdate || isSquirrelInstall()) return;
+      launchPendingWindowsSetup(false);
+    });
+  }
   autoUpdater.logger = {
     info: (message) => logger.info(String(message)),
     warn: (message) => logger.warn(String(message)),
@@ -165,7 +299,15 @@ function setupElectronUpdater(): void {
     logger.debug(`Download progress: ${Math.round(progress.percent)}%`);
   });
 
-  autoUpdater.on('update-downloaded', (info) => {
+  autoUpdater.on('update-downloaded', (info: UpdateDownloadedEvent) => {
+    if (!isNewerVersion(info.version, app.getVersion())) {
+      logger.info(`Already running ${app.getVersion()}; ignoring update ${info.version}`);
+      isManualCheck = false;
+      return;
+    }
+    if (process.platform === 'win32' && info.downloadedFile) {
+      pendingWindowsSetup = { version: info.version, filePath: info.downloadedFile };
+    }
     logger.info(`Update downloaded: ${info.version}`);
     isManualCheck = false;
     showRestartDialog(info.version);
