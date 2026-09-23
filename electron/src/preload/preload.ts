@@ -37,6 +37,59 @@ function readArg(prefix: string): string | null {
 const windowRole = (readArg(ARG_WINDOW_ROLE) ?? 'main') as WindowRole;
 const appVersion = readArg(ARG_APP_VERSION) ?? '';
 
+/**
+ * Google refuses calendar consent when the user agent or client hints mention
+ * Electron. The main process also rewrites the request headers; this covers
+ * the in-page `navigator` checks. Outlook accepts the same Chrome identity.
+ */
+function patchOAuthBrowserIdentity(): void {
+  if (windowRole !== 'oauth') return;
+  const platform =
+    process.platform === 'darwin' ? 'macOS' : process.platform === 'win32' ? 'Windows' : 'Linux';
+  void webFrame.executeJavaScript(`(() => {
+    try {
+      if (window.__pynnOAuthIdentity) return;
+      window.__pynnOAuthIdentity = true;
+      const clean = (value) => String(value)
+        .replace(/\\sElectron\\/\\S+/g, '')
+        .replace(/\\sPynn\\/\\S+/g, '')
+        .replace(/\\s{2,}/g, ' ')
+        .trim();
+      const ua = clean(navigator.userAgent);
+      Object.defineProperty(Navigator.prototype, 'userAgent', { configurable: true, get: () => ua });
+      const major = (ua.match(/Chrome\\/(\\d+)/) || [])[1] || '0';
+      const brands = [
+        { brand: 'Chromium', version: major },
+        { brand: 'Google Chrome', version: major },
+        { brand: 'Not_A Brand', version: '24' },
+      ];
+      const platformLabel = ${JSON.stringify(platform)};
+      const data = {
+        brands,
+        mobile: false,
+        platform: platformLabel,
+        toJSON() { return { brands, mobile: false, platform: platformLabel }; },
+        getHighEntropyValues() {
+          return Promise.resolve({
+            brands,
+            mobile: false,
+            platform: platformLabel,
+            architecture: '',
+            bitness: '',
+            model: '',
+            platformVersion: '',
+            uaFullVersion: major + '.0.0.0',
+            fullVersionList: brands.map((brand) => ({ brand: brand.brand, version: brand.version + '.0.0.0' })),
+          });
+        },
+      };
+      Object.defineProperty(Navigator.prototype, 'userAgentData', { configurable: true, get: () => data });
+    } catch (e) {}
+  })();`);
+}
+
+patchOAuthBrowserIdentity();
+
 let callsSuppressed = readArg(ARG_CALLS_SUPPRESSED) === 'true';
 const suppressionListeners = new Set<(suppressed: boolean) => void>();
 

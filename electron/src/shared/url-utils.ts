@@ -80,6 +80,103 @@ export function isStripeCheckoutHost(hostname: string): boolean {
   return STRIPE_CHECKOUT_HOSTS.has(hostname.toLowerCase());
 }
 
+const CALENDAR_OAUTH_START_PATHS = new Set([
+  '/api/user-calendar/google',
+  '/api/user-calendar/microsoft',
+  '/api/mentor-calendar/google',
+  '/api/mentor-calendar/microsoft',
+]);
+
+const CALENDAR_OAUTH_CALLBACK_PATHS = [
+  '/api/mentor-calendar/google/callback',
+  '/api/mentor-calendar/microsoft/callback',
+];
+
+function normalizedPath(pathname: string): string {
+  const trimmed = pathname.replace(/\/+$/, '');
+  return trimmed || '/';
+}
+
+/**
+ * Connect buttons on /agentic/calendar (and mentor bookings) are same-tab
+ * links to these routes. They must leave the main window before the 302 to
+ * Google or Microsoft replaces it.
+ */
+export function isCalendarOAuthStartUrl(raw: string): boolean {
+  const parsed = parseUrl(raw);
+  if (!parsed || !isPrimaryHost(parsed.hostname)) return false;
+  if (!SAFE_WEB_PROTOCOLS.has(parsed.protocol.toLowerCase())) return false;
+  return CALENDAR_OAUTH_START_PATHS.has(normalizedPath(parsed.pathname));
+}
+
+/** Provider authorize URL whose redirect_uri is a Pynn calendar callback. */
+export function isCalendarOAuthProviderUrl(raw: string): boolean {
+  const parsed = parseUrl(raw);
+  if (!parsed || !SAFE_WEB_PROTOCOLS.has(parsed.protocol.toLowerCase())) return false;
+  if (isPrimaryHost(parsed.hostname)) return false;
+
+  const redirectUri = parsed.searchParams.get('redirect_uri');
+  if (!redirectUri) return false;
+
+  const callback = parseUrl(redirectUri);
+  if (!callback) {
+    return CALENDAR_OAUTH_CALLBACK_PATHS.some((path) => redirectUri.includes(path));
+  }
+  return CALENDAR_OAUTH_CALLBACK_PATHS.includes(normalizedPath(callback.pathname));
+}
+
+export function isCalendarOAuthFlowUrl(raw: string): boolean {
+  return isCalendarOAuthStartUrl(raw) || isCalendarOAuthProviderUrl(raw);
+}
+
+/**
+ * Hosts Google and Microsoft use while the user is signing in.
+ * Later hops (login.live.com, etc.) often drop redirect_uri; the OAuth
+ * window allows those, and this list is only for recognizing them.
+ */
+export function isOAuthProviderHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  if (
+    host === 'accounts.google.com' ||
+    host === 'accounts.youtube.com' ||
+    host === 'myaccount.google.com'
+  ) {
+    return true;
+  }
+  if (host === 'login.microsoftonline.com' || host.endsWith('.microsoftonline.com')) return true;
+  if (host.endsWith('.microsoftonline.us')) return true;
+  if (
+    host === 'login.microsoft.com' ||
+    host === 'login.live.com' ||
+    host === 'signup.live.com' ||
+    host === 'account.live.com' ||
+    host === 'login.windows.net'
+  ) {
+    return true;
+  }
+  if (host === 'account.microsoft.com' || host.endsWith('.account.microsoft.com')) return true;
+  if (host.endsWith('.msauth.net') || host.endsWith('.msftauth.net') || host.endsWith('.msidentity.com')) {
+    return true;
+  }
+  return false;
+}
+
+/** Drop Electron/product tokens so Google does not reject the sign-in window. */
+export function chromeLikeUserAgent(userAgent: string, productName = 'Pynn'): string {
+  const escaped = productName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return userAgent
+    .replace(new RegExp(`\\s${escaped}/\\S+`, 'g'), '')
+    .replace(/\sElectron\/\S+/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+export function urlForLog(raw: string): string {
+  const parsed = parseUrl(raw);
+  if (!parsed) return '[invalid-url]';
+  return `${parsed.origin}${parsed.pathname}`;
+}
+
 /**
  * Checkout windows must follow Stripe plus bank 3DS pages (arbitrary HTTPS).
  * Primary-host URLs are handed back to the main window instead.

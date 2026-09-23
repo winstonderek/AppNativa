@@ -83,6 +83,7 @@ Examples (prepared for future use):
 - Remote content treated as untrusted
 - Navigation restricted on the main window to `angelhive.pynn.ai` and subdomains
 - Stripe Checkout / Customer Portal (`checkout.stripe.com`, `billing.stripe.com`, `pay.stripe.com`) open in an in-app window; success/cancel URLs return to the main window
+- Google and Outlook calendar connect open in a smaller in-app window (macOS and Windows). Provider pages stay in that window; the return to Pynn is loaded in the main window. The web app is unchanged
 - Other external links validated before `shell.openExternal()`
 - Invalid TLS certificates rejected in production
 - No sensitive data in logs (tokens, cookies, passwords redacted)

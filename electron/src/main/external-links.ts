@@ -10,15 +10,20 @@ import {
   isAllowedCheckoutNavigation,
   isAllowedMainNavigation,
   isAllowedPopupNavigation,
+  isCalendarOAuthFlowUrl,
   isSafeForExternalOpen,
   normalizeUrl,
+  urlForLog,
 } from '../shared/url-utils';
 import { logger } from './logger';
 import {
   getCheckoutWindowOptions,
+  getOAuthWindowOptions,
   getPopupWindowOptions,
   openCheckoutWindow,
+  openOAuthWindow,
   returnCheckoutToApp,
+  returnOAuthToApp,
 } from './window';
 
 export async function openExternalSafely(url: string): Promise<boolean> {
@@ -46,6 +51,13 @@ function openStripeCheckoutInApp(url: string): void {
   }
 }
 
+function openCalendarOAuthInApp(url: string, webContents: WebContents): void {
+  const opened = openOAuthWindow(url);
+  if (opened) return;
+  logger.warn(`Calendar sign-in window failed; continuing here: ${urlForLog(url)}`);
+  webContents.loadURL(url).catch((err) => logger.error('Calendar OAuth fallback load failed', err));
+}
+
 function handOffCheckoutIfPossible(webContents: WebContents, url: string): boolean {
   const fromWindow = BrowserWindow.fromWebContents(webContents);
   if (!fromWindow) return false;
@@ -53,11 +65,18 @@ function handOffCheckoutIfPossible(webContents: WebContents, url: string): boole
   return true;
 }
 
+function handOffOAuthIfPossible(webContents: WebContents, url: string): boolean {
+  const fromWindow = BrowserWindow.fromWebContents(webContents);
+  if (!fromWindow) return false;
+  returnOAuthToApp(url, fromWindow);
+  return true;
+}
+
 export function setupNavigationHandlers(
   webContents: WebContents,
-  options: { isPopup?: boolean; isCheckout?: boolean } = {},
+  options: { isPopup?: boolean; isCheckout?: boolean; isOAuth?: boolean } = {},
 ): void {
-  const { isPopup = false, isCheckout = false } = options;
+  const { isPopup = false, isCheckout = false, isOAuth = false } = options;
 
   const onTopLevelNavigation = (event: Electron.Event, url: string): void => {
     const classification = classifyUrl(url);
@@ -65,6 +84,10 @@ export function setupNavigationHandlers(
     if (classification === 'deep-link') {
       event.preventDefault();
       const target = deepLinkToAppUrl(url);
+      if (isOAuth) {
+        handOffOAuthIfPossible(webContents, target);
+        return;
+      }
       webContents.loadURL(target).catch((err) => logger.error('Deep link navigation failed', err));
       return;
     }
@@ -88,8 +111,29 @@ export function setupNavigationHandlers(
       return;
     }
 
+    if (classification === 'primary' && isOAuth) {
+      event.preventDefault();
+      handOffOAuthIfPossible(webContents, url);
+      return;
+    }
+
+    if (classification === 'primary' && isCalendarOAuthFlowUrl(url)) {
+      event.preventDefault();
+      openCalendarOAuthInApp(url, webContents);
+      return;
+    }
+
     if (classification === 'external-web') {
+      // Stay inside the sign-in window for every provider hop (Google account
+      // chooser, login.live.com, etc.). Sending those to the system browser
+      // left the main window stuck on the provider page.
+      if (isOAuth) return;
       if (isCheckout && isAllowedCheckoutNavigation(url)) return;
+      if (isCalendarOAuthFlowUrl(url)) {
+        event.preventDefault();
+        openCalendarOAuthInApp(url, webContents);
+        return;
+      }
       event.preventDefault();
       void openExternalSafely(url);
       return;
@@ -104,9 +148,11 @@ export function setupNavigationHandlers(
 
   webContents.on('will-navigate', onTopLevelNavigation);
 
-  // Only intercept Stripe entry/exit on redirects. A full navigation policy
-  // here would break same-window OAuth (Pynn 302 → accounts.google.com → app).
-  webContents.on('will-redirect', (event, url) => {
+  // Subframe redirects must keep going (provider iframes). Top-level Stripe
+  // and calendar OAuth are pulled into their own windows. Other top-level
+  // redirects, including sign-in with Google, stay in this window.
+  webContents.on('will-redirect', (event, url, _isInPlace, isMainFrame) => {
+    if (isMainFrame === false) return;
     const classification = classifyUrl(url);
 
     if (classification === 'stripe-checkout' && !isCheckout) {
@@ -118,6 +164,18 @@ export function setupNavigationHandlers(
     if (classification === 'primary' && isCheckout) {
       event.preventDefault();
       handOffCheckoutIfPossible(webContents, url);
+      return;
+    }
+
+    if (classification === 'primary' && isOAuth) {
+      event.preventDefault();
+      handOffOAuthIfPossible(webContents, url);
+      return;
+    }
+
+    if (!isOAuth && !isCheckout && isCalendarOAuthFlowUrl(url)) {
+      event.preventDefault();
+      openCalendarOAuthInApp(url, webContents);
     }
   });
 
@@ -137,7 +195,11 @@ export function setupNavigationHandlers(
 
     if (classification === 'deep-link') {
       const target = deepLinkToAppUrl(url);
-      webContents.loadURL(target).catch((err) => logger.error('Deep link load failed', err));
+      if (isOAuth) {
+        handOffOAuthIfPossible(webContents, target);
+      } else {
+        webContents.loadURL(target).catch((err) => logger.error('Deep link load failed', err));
+      }
       return { action: 'deny' };
     }
 
@@ -157,6 +219,14 @@ export function setupNavigationHandlers(
         handOffCheckoutIfPossible(webContents, url);
         return { action: 'deny' };
       }
+      if (isOAuth) {
+        handOffOAuthIfPossible(webContents, url);
+        return { action: 'deny' };
+      }
+      if (isCalendarOAuthFlowUrl(url)) {
+        openCalendarOAuthInApp(url, webContents);
+        return { action: 'deny' };
+      }
       return {
         action: 'allow',
         overrideBrowserWindowOptions: getPopupWindowOptions(),
@@ -164,11 +234,21 @@ export function setupNavigationHandlers(
     }
 
     if (classification === 'external-web') {
+      if (isOAuth) {
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: getOAuthWindowOptions(),
+        };
+      }
       if (isCheckout) {
         return {
           action: 'allow',
           overrideBrowserWindowOptions: getCheckoutWindowOptions(),
         };
+      }
+      if (isCalendarOAuthFlowUrl(url)) {
+        openCalendarOAuthInApp(url, webContents);
+        return { action: 'deny' };
       }
       void openExternalSafely(url);
       return { action: 'deny' };

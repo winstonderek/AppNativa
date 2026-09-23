@@ -38,7 +38,7 @@ export const MIN_TALKS_WINDOW_WIDTH = 480;
 export const MIN_TALKS_WINDOW_HEIGHT = 400;
 export const TALKS_PATH = '/agentic/talks';
 
-export type WindowRole = 'main' | 'workspace' | 'call' | 'talks' | 'popup' | 'checkout';
+export type WindowRole = 'main' | 'workspace' | 'call' | 'talks' | 'popup' | 'checkout' | 'oauth';
 
 /**
  * Hosted Stripe surfaces that should stay inside the desktop app instead of
@@ -50,6 +50,15 @@ export const STRIPE_CHECKOUT_HOSTS = new Set([
   'billing.stripe.com',
   'pay.stripe.com',
 ]);
+
+/**
+ * Compact Google / Outlook consent window. Tall enough for the provider
+ * sign-in form, narrow enough that the main window stays usable beside it.
+ */
+export const OAUTH_WINDOW_WIDTH = 480;
+export const OAUTH_WINDOW_HEIGHT = 680;
+export const MIN_OAUTH_WINDOW_WIDTH = 400;
+export const MIN_OAUTH_WINDOW_HEIGHT = 520;
 
 export const IPC_CHANNELS = {
   /** Renderer → main: open a floating call window and hand the session over. */

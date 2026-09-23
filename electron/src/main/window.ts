@@ -6,6 +6,7 @@ import {
   app,
   nativeTheme,
   screen,
+  session,
 } from 'electron';
 import windowStateKeeper from 'electron-window-state';
 import path from 'node:path';
@@ -15,10 +16,15 @@ import {
   ARG_PREFIXES,
   DEFAULT_WINDOW_HEIGHT,
   DEFAULT_WINDOW_WIDTH,
+  MIN_OAUTH_WINDOW_HEIGHT,
+  MIN_OAUTH_WINDOW_WIDTH,
   MIN_WINDOW_HEIGHT,
   MIN_WINDOW_WIDTH,
+  OAUTH_WINDOW_HEIGHT,
+  OAUTH_WINDOW_WIDTH,
   type WindowRole,
 } from '../shared/constants';
+import { chromeLikeUserAgent, isOAuthProviderHost, urlForLog } from '../shared/url-utils';
 import { setupDownloads } from './downloads';
 import { setupExternalLinkHandlers, setupNavigationHandlers } from './external-links';
 import { setupContextMenu } from './context-menu';
@@ -30,7 +36,11 @@ type WindowState = ReturnType<typeof windowStateKeeper>;
 let mainWindow: BrowserWindow | null = null;
 let mainWindowState: WindowState | null = null;
 let checkoutWindow: BrowserWindow | null = null;
+let oauthWindow: BrowserWindow | null = null;
+let oauthReturnInFlight = false;
 const popupWindows = new Set<BrowserWindow>();
+const oauthWebContentsIds = new Set<number>();
+let oauthUserAgentHookInstalled = false;
 const windowRoles = new WeakMap<BrowserWindow, WindowRole>();
 
 const MACOS_WINDOW_CHROME: Partial<Electron.BrowserWindowConstructorOptions> = {
@@ -94,6 +104,19 @@ export function getCheckoutWindowOptions(): Electron.BrowserWindowConstructorOpt
     title: APP_NAME,
     ...getPlatformWindowOptions(),
     webPreferences: getWebPreferences('checkout'),
+  };
+}
+
+export function getOAuthWindowOptions(): Electron.BrowserWindowConstructorOptions {
+  return {
+    width: OAUTH_WINDOW_WIDTH,
+    height: OAUTH_WINDOW_HEIGHT,
+    minWidth: MIN_OAUTH_WINDOW_WIDTH,
+    minHeight: MIN_OAUTH_WINDOW_HEIGHT,
+    autoHideMenuBar: true,
+    title: `${APP_NAME} - Connect calendar`,
+    ...getPlatformWindowOptions(),
+    webPreferences: getWebPreferences('oauth'),
   };
 }
 
@@ -423,6 +446,210 @@ export function returnCheckoutToApp(url: string, fromWindow: BrowserWindow): voi
   if (!fromWindow.isDestroyed()) {
     fromWindow.webContents.loadURL(url).catch((err) => logger.error('Checkout fallback navigation failed', err));
   }
+}
+
+function setHeader(headers: Record<string, string>, name: string, value: string): void {
+  const key = Object.keys(headers).find((item) => item.toLowerCase() === name.toLowerCase()) ?? name;
+  headers[key] = value;
+}
+
+function chromeClientHints(userAgent: string): { ua: string; secChUa: string; fullVersionList: string; platform: string } {
+  const ua = chromeLikeUserAgent(userAgent, APP_NAME);
+  const major = /Chrome\/(\d+)/.exec(ua)?.[1] ?? '0';
+  const full = /Chrome\/(\d+\.\d+\.\d+\.\d+)/.exec(ua)?.[1] ?? `${major}.0.0.0`;
+  const platform = process.platform === 'darwin' ? 'macOS' : process.platform === 'win32' ? 'Windows' : 'Linux';
+  return {
+    ua,
+    secChUa: `"Chromium";v="${major}", "Google Chrome";v="${major}", "Not_A Brand";v="24"`,
+    fullVersionList: `"Chromium";v="${full}", "Google Chrome";v="${full}", "Not_A Brand";v="24.0.0.0"`,
+    platform,
+  };
+}
+
+/**
+ * Google rejects sign-in when the user agent or client hints say Electron.
+ * Rewrite only requests that belong to the calendar window.
+ */
+function installOAuthUserAgentHook(): void {
+  if (oauthUserAgentHookInstalled) return;
+  oauthUserAgentHookInstalled = true;
+
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    try {
+      const contentsId = details.webContentsId;
+      const fromOAuthWindow = contentsId != null && oauthWebContentsIds.has(contentsId);
+      let providerRequest = false;
+      if (!fromOAuthWindow && oauthWebContentsIds.size > 0 && contentsId == null) {
+        providerRequest = isOAuthProviderHost(new URL(details.url).hostname);
+      }
+      if (!fromOAuthWindow && !providerRequest) {
+        callback({ requestHeaders: details.requestHeaders });
+        return;
+      }
+
+      const headers = { ...details.requestHeaders };
+      const currentUa =
+        Object.entries(headers).find(([key]) => key.toLowerCase() === 'user-agent')?.[1] ??
+        session.defaultSession.getUserAgent();
+      const hints = chromeClientHints(currentUa);
+      setHeader(headers, 'User-Agent', hints.ua);
+      setHeader(headers, 'sec-ch-ua', hints.secChUa);
+      setHeader(headers, 'sec-ch-ua-mobile', '?0');
+      setHeader(headers, 'sec-ch-ua-platform', `"${hints.platform}"`);
+      setHeader(headers, 'sec-ch-ua-full-version-list', hints.fullVersionList);
+      callback({ requestHeaders: headers });
+    } catch (error) {
+      logger.error('OAuth user-agent hook failed', error);
+      callback({ requestHeaders: details.requestHeaders });
+    }
+  });
+}
+
+function prepareOAuthContents(contents: WebContents): void {
+  installOAuthUserAgentHook();
+  if (!oauthWebContentsIds.has(contents.id)) {
+    oauthWebContentsIds.add(contents.id);
+    contents.once('destroyed', () => {
+      oauthWebContentsIds.delete(contents.id);
+    });
+  }
+  contents.setUserAgent(chromeLikeUserAgent(session.defaultSession.getUserAgent(), APP_NAME));
+}
+
+function centeredOn(
+  parent: BrowserWindow | undefined,
+  width: number,
+  height: number,
+): Pick<Electron.Rectangle, 'x' | 'y'> {
+  const display =
+    parent && !parent.isDestroyed()
+      ? screen.getDisplayMatching(parent.getBounds())
+      : screen.getPrimaryDisplay();
+  const area = display.workArea;
+  const anchor = parent && !parent.isDestroyed() ? parent.getBounds() : area;
+  const x = Math.round(anchor.x + (anchor.width - width) / 2);
+  const y = Math.round(anchor.y + (anchor.height - height) / 2);
+  return {
+    x: Math.min(Math.max(x, area.x), area.x + Math.max(0, area.width - width)),
+    y: Math.min(Math.max(y, area.y), area.y + Math.max(0, area.height - height)),
+  };
+}
+
+/**
+ * Google / Outlook calendar consent. Same session as the main window so the
+ * OAuth cookies and the callback stay inside the app. macOS and Windows both
+ * use a normal BrowserWindow; only the chrome (title bar, menu) differs.
+ */
+export function openOAuthWindow(url: string): BrowserWindow | null {
+  if (oauthWindow && !oauthWindow.isDestroyed()) {
+    prepareOAuthContents(oauthWindow.webContents);
+    oauthWindow.loadURL(url).catch((err) => logger.error('OAuth window reload failed', err));
+    oauthWindow.show();
+    oauthWindow.focus();
+    return oauthWindow;
+  }
+
+  try {
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    const window = new BrowserWindow({
+      ...getOAuthWindowOptions(),
+      ...centeredOn(parent, OAUTH_WINDOW_WIDTH, OAUTH_WINDOW_HEIGHT),
+      parent,
+      modal: false,
+    });
+
+    if (process.platform !== 'darwin') {
+      window.removeMenu();
+    }
+
+    oauthWindow = window;
+    popupWindows.add(window);
+    windowRoles.set(window, 'oauth');
+    prepareOAuthContents(window.webContents);
+    attachOAuthWindowHandlers(window);
+
+    window.on('closed', () => {
+      popupWindows.delete(window);
+      if (oauthWindow === window) oauthWindow = null;
+    });
+
+    window.on('page-title-updated', (event) => {
+      event.preventDefault();
+      window.setTitle(`${APP_NAME} - Connect calendar`);
+    });
+
+    logger.info(`Opening calendar sign-in window: ${urlForLog(url)}`);
+    window.loadURL(url).catch((err) => {
+      logger.error('OAuth window load failed', err);
+      window.close();
+    });
+
+    return window;
+  } catch (error) {
+    logger.error('Failed to create OAuth window', error);
+    return null;
+  }
+}
+
+function attachOAuthWindowHandlers(window: BrowserWindow): void {
+  setupNavigationHandlers(window.webContents, { isOAuth: true });
+  setupDownloads(window.webContents);
+  setupContextMenu(window.webContents);
+
+  window.webContents.on('did-create-window', (childWindow) => {
+    popupWindows.add(childWindow);
+    windowRoles.set(childWindow, 'oauth');
+    prepareOAuthContents(childWindow.webContents);
+    attachOAuthWindowHandlers(childWindow);
+    if (process.platform !== 'darwin') {
+      childWindow.removeMenu();
+    }
+    childWindow.on('page-title-updated', (event) => {
+      event.preventDefault();
+      childWindow.setTitle(`${APP_NAME} - Connect calendar`);
+    });
+    childWindow.on('closed', () => {
+      popupWindows.delete(childWindow);
+    });
+  });
+}
+
+function closeOAuthWindows(): void {
+  const windows = new Set<BrowserWindow>();
+  if (oauthWindow) windows.add(oauthWindow);
+  for (const popup of popupWindows) {
+    if (getWindowRole(popup) === 'oauth') windows.add(popup);
+  }
+  for (const window of windows) {
+    if (!window.isDestroyed()) window.close();
+  }
+}
+
+/** After Google/Microsoft returns to Pynn, continue in the main window. */
+export function returnOAuthToApp(url: string, fromWindow: BrowserWindow): void {
+  // Google can emit both will-navigate and will-redirect for the callback.
+  // The authorization code is single-use, so only the first handoff may load it.
+  if (oauthReturnInFlight) return;
+  oauthReturnInFlight = true;
+
+  const main = getMainWindow();
+  if (main && !main.isDestroyed()) {
+    main.webContents.loadURL(url).catch((err) => logger.error('OAuth return navigation failed', err));
+    focusMainWindow();
+    setImmediate(() => {
+      closeOAuthWindows();
+      oauthReturnInFlight = false;
+    });
+    return;
+  }
+
+  const fallback = !fromWindow.isDestroyed() ? fromWindow : oauthWindow;
+  if (fallback && !fallback.isDestroyed()) {
+    fallback.webContents.loadURL(url).catch((err) => logger.error('OAuth fallback navigation failed', err));
+  }
+  setImmediate(() => {
+    oauthReturnInFlight = false;
+  });
 }
 
 function setupKeyboardShortcuts(window: BrowserWindow): void {
