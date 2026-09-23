@@ -5,6 +5,7 @@ import {
   WebContents,
   app,
   nativeTheme,
+  screen,
 } from 'electron';
 import windowStateKeeper from 'electron-window-state';
 import path from 'node:path';
@@ -253,9 +254,11 @@ export function createAppWindow(init: AppWindowInit = {}): BrowserWindow {
   });
 
   window.on('closed', () => {
-    if (mainWindow === window) {
-      mainWindow = null;
-    }
+    if (mainWindow !== window) return;
+    mainWindow =
+      BrowserWindow.getAllWindows().find(
+        (candidate) => !candidate.isDestroyed() && getWindowRole(candidate) === 'main',
+      ) ?? null;
   });
 
   loadAppUrl(window, init.initialUrl ?? APP_URL);
@@ -265,6 +268,41 @@ export function createAppWindow(init: AppWindowInit = {}): BrowserWindow {
 
 export function createMainWindow(initialUrl?: string): BrowserWindow {
   return createAppWindow({ initialUrl, role: 'main' });
+}
+
+const NEW_WINDOW_OFFSET = 28;
+
+/** Opens another full app window in this process, offset from the current one. */
+function openAnotherWindow(): void {
+  const focused = BrowserWindow.getFocusedWindow();
+  const anchor =
+    focused && !focused.isDestroyed() && getWindowRole(focused) === 'main'
+      ? focused
+      : BrowserWindow.getAllWindows().find(
+          (window) => !window.isDestroyed() && getWindowRole(window) === 'main',
+        );
+
+  if (!anchor) {
+    createMainWindow();
+    return;
+  }
+
+  const bounds = anchor.getNormalBounds();
+  const { workArea } = screen.getDisplayMatching(bounds);
+  let x = bounds.x + NEW_WINDOW_OFFSET;
+  let y = bounds.y + NEW_WINDOW_OFFSET;
+  const maxX = workArea.x + workArea.width - Math.min(bounds.width, workArea.width);
+  const maxY = workArea.y + workArea.height - Math.min(bounds.height, workArea.height);
+  if (x > maxX || y > maxY) {
+    x = workArea.x + NEW_WINDOW_OFFSET;
+    y = workArea.y + NEW_WINDOW_OFFSET;
+  }
+
+  createAppWindow({
+    role: 'main',
+    becomeMain: false,
+    bounds: { x, y, width: bounds.width, height: bounds.height },
+  });
 }
 
 export function loadAppUrl(window: BrowserWindow, url: string): void {
@@ -473,6 +511,22 @@ export function buildApplicationMenu(): void {
           },
         ]
       : []),
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'New Window',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => openAnotherWindow(),
+        },
+        ...(!isMac
+          ? ([
+              { type: 'separator' as const },
+              { role: 'quit' as const },
+            ] as Electron.MenuItemConstructorOptions[])
+          : []),
+      ],
+    },
     {
       label: 'Edit',
       submenu: [
