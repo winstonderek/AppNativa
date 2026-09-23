@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { app, autoUpdater as squirrelUpdater, BrowserWindow, dialog } from 'electron';
+import { app, BrowserWindow, dialog } from 'electron';
 import { autoUpdater, type UpdateDownloadedEvent } from 'electron-updater';
 import {
   APP_NAME,
@@ -15,15 +15,11 @@ import { logger, isDevelopment } from './logger';
 import { isSquirrelInstall } from './squirrel';
 import { destroyTray } from './tray';
 
-const GITHUB_LATEST_DOWNLOAD_URL = `https://github.com/${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO}/releases/latest/download`;
-
 let initialized = false;
 let isManualCheck = false;
 let installingUpdate = false;
 let windowsSetupSpawned = false;
 let pendingWindowsSetup: { version: string; filePath: string } | null = null;
-
-const WINDOWS_SETUP_MARKER = 'windows-setup-launched.json';
 
 export function isInstallingUpdate(): boolean {
   return installingUpdate;
@@ -58,45 +54,31 @@ function spawnDetached(exe: string, args: string[]): void {
   child.unref();
 }
 
-function windowsSetupMarkerPath(): string {
-  return path.join(app.getPath('userData'), WINDOWS_SETUP_MARKER);
-}
-
-function setupAlreadyLaunched(version: string): boolean {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(windowsSetupMarkerPath(), 'utf8')) as {
-      version?: string;
-    };
-    return parsed.version === version;
-  } catch {
-    return false;
-  }
-}
-
-function markSetupLaunched(version: string): void {
-  try {
-    const file = windowsSetupMarkerPath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ version }));
-  } catch (error) {
-    logger.warn('Could not record Windows setup launch', error);
-  }
-}
-
 /**
- * latest.yml points at Squirrel's Setup.exe. electron-updater launches that
- * file with NSIS flags, which this installer ignores, so the running copy
- * never changes version and the prompt returns on the next launch.
+ * latest.yml points at Squirrel's Setup.exe. That installer cannot replace
+ * files while this process is still running, and electron-updater would
+ * launch it with NSIS flags the Squirrel setup ignores.
+ * Wait until this process exits, then start Setup.exe so the new version
+ * is what opens afterwards.
  */
-function launchPendingWindowsSetup(force: boolean): void {
+function launchPendingWindowsSetup(): void {
   if (!pendingWindowsSetup || windowsSetupSpawned) return;
-  if (!force && setupAlreadyLaunched(pendingWindowsSetup.version)) return;
   if (!fs.existsSync(pendingWindowsSetup.filePath)) return;
 
   windowsSetupSpawned = true;
-  spawnDetached(pendingWindowsSetup.filePath, []);
-  markSetupLaunched(pendingWindowsSetup.version);
-  logger.info(`Started Windows installer for ${pendingWindowsSetup.version}`);
+  const filePath = pendingWindowsSetup.filePath.replace(/'/g, "''");
+  const command = [
+    `Wait-Process -Id ${process.pid} -ErrorAction SilentlyContinue`,
+    `Start-Process -FilePath '${filePath}'`,
+  ].join('; ');
+
+  const child = spawn(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', command],
+    { detached: true, stdio: 'ignore', windowsHide: true },
+  );
+  child.unref();
+  logger.info(`Will start Windows installer for ${pendingWindowsSetup.version} after quit`);
 }
 
 function newestInstalledVersion(root: string): string | null {
@@ -146,7 +128,7 @@ export function handoffToUpdatedWindowsInstall(): boolean {
   if (!fs.existsSync(installedExe) || !fs.existsSync(updateExe)) return false;
 
   logger.info(`Opening installed ${APP_NAME} ${newest} instead of ${app.getVersion()}`);
-  spawnDetached(updateExe, ['--processStart', WINDOWS_SQUIRREL_EXE_NAME]);
+  spawnDetached(installedExe, []);
   setImmediate(() => {
     app.quit();
   });
@@ -161,29 +143,18 @@ function installDownloadedUpdate(): void {
   // in the same tick is a known no-op on macOS.
   setImmediate(() => {
     try {
-      if (process.platform === 'win32' && isSquirrelInstall()) {
-        // quitAndInstall uses --processStartAndWait, which dies with this process.
-        const updateExe = path.resolve(path.dirname(process.execPath), '..', 'Update.exe');
-        spawnDetached(updateExe, ['--processStart', path.basename(process.execPath)]);
-      } else if (process.platform === 'win32') {
-        launchPendingWindowsSetup(true);
+      if (process.platform === 'win32') {
+        launchPendingWindowsSetup();
+        app.quit();
       } else {
+        // quitAndInstall already asks ShipIt to replace the bundle, quit, and
+        // relaunch. A following app.quit() or app.exit() kills the process
+        // before that handoff, so the app closes and stays on the old version.
         autoUpdater.quitAndInstall(false, true);
       }
     } catch (error) {
       logger.error('quitAndInstall failed', error);
     }
-
-    app.quit();
-
-    if (process.platform !== 'darwin') return;
-
-    const forceExit = setTimeout(() => {
-      logger.warn('Update install did not quit in time; forcing exit');
-      app.exit(0);
-    }, 1500);
-
-    app.once('will-quit', () => clearTimeout(forceExit));
   });
 }
 
@@ -215,46 +186,6 @@ function showUpToDateDialog(): void {
   });
 }
 
-function setupSquirrelUpdater(): void {
-  squirrelUpdater.setFeedURL({ url: GITHUB_LATEST_DOWNLOAD_URL });
-
-  squirrelUpdater.on('checking-for-update', () => {
-    logger.info('Checking for updates (Squirrel)…');
-  });
-
-  squirrelUpdater.on('update-available', () => {
-    logger.info('Squirrel update available, downloading…');
-  });
-
-  squirrelUpdater.on('update-not-available', () => {
-    logger.info('No updates available');
-    if (isManualCheck) {
-      isManualCheck = false;
-      showUpToDateDialog();
-    }
-  });
-
-  squirrelUpdater.on('update-downloaded', (_event, _releaseNotes, releaseName) => {
-    const version = typeof releaseName === 'string' ? releaseName : undefined;
-    if (version && !isNewerVersion(version, app.getVersion())) {
-      logger.info(`Already running ${app.getVersion()}; ignoring Squirrel update ${version}`);
-      isManualCheck = false;
-      return;
-    }
-    logger.info(`Squirrel update downloaded${version ? `: ${version}` : ''}`);
-    isManualCheck = false;
-    showRestartDialog(version);
-  });
-
-  squirrelUpdater.on('error', (error) => {
-    logger.error('Squirrel auto-updater error', error);
-    if (isManualCheck) {
-      isManualCheck = false;
-      dialog.showErrorBox('Update check failed', error.message);
-    }
-  });
-}
-
 function setupElectronUpdater(): void {
   autoUpdater.autoDownload = true;
   // Windows artifacts are Squirrel setup files, not NSIS. Silent install-on-quit
@@ -262,8 +193,8 @@ function setupElectronUpdater(): void {
   autoUpdater.autoInstallOnAppQuit = process.platform !== 'win32';
   if (process.platform === 'win32') {
     app.on('before-quit', () => {
-      if (installingUpdate || isSquirrelInstall()) return;
-      launchPendingWindowsSetup(false);
+      if (installingUpdate) return;
+      launchPendingWindowsSetup();
     });
   }
   autoUpdater.logger = {
@@ -323,11 +254,6 @@ function setupElectronUpdater(): void {
 }
 
 function checkForUpdates(): void {
-  if (isSquirrelInstall()) {
-    squirrelUpdater.checkForUpdates();
-    return;
-  }
-
   autoUpdater.checkForUpdates().catch((err) => {
     logger.warn('Update check failed', err.message);
     if (isManualCheck) {
@@ -346,11 +272,7 @@ function initializeUpdater(): boolean {
   if (initialized) return true;
 
   initialized = true;
-  if (isSquirrelInstall()) {
-    setupSquirrelUpdater();
-  } else {
-    setupElectronUpdater();
-  }
+  setupElectronUpdater();
   return true;
 }
 
