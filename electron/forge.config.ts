@@ -82,10 +82,10 @@ const config: ForgeConfig = {
         : {}),
     }),
     new MakerZIP({}, ['darwin', 'win32']),
-    new MakerDMG({
-      name: 'Pynn',
+    new MakerDMG((arch) => ({
+      name: arch === 'x64' ? 'intel-pynn' : 'Pynn',
       icon: path.resolve(__dirname, 'assets', 'icon.icns'),
-    }),
+    })),
   ],
   publishers: [
     new PublisherGithub({

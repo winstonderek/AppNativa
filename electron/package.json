@@ -1,7 +1,7 @@
 {
   "name": "pynn-desktop",
   "productName": "Pynn",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Official Pynn desktop client",
   "main": "dist/main/main.js",
   "author": "Pynn",
@@ -15,11 +15,12 @@
     "forge": "./forge.config.ts"
   },
   "scripts": {
-    "postinstall": "node scripts/generate-placeholder-icons.js",
+    "postinstall": "node scripts/generate-placeholder-icons.js && node scripts/build-windows-icon.js",
     "build": "tsc && node scripts/copy-static.js",
     "start": "npm run build && cross-env NODE_ENV=development electron-forge start",
     "package": "npm run build && electron-forge package",
     "make": "npm run build && electron-forge make",
+    "make:mac:intel": "npm run build && electron-forge make --platform=darwin --arch=x64 --targets=dmg",
     "make:win": "npm run build && electron-forge make --platform=win32 --arch=x64",
     "make:win:zip": "npm run build && electron-forge make --platform=win32 --arch=x64 --targets=@electron-forge/maker-zip",
     "make:win:setup": "npm run build && electron-forge make --platform=win32 --arch=x64 --targets=@electron-forge/maker-squirrel",

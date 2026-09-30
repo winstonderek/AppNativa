@@ -11,6 +11,14 @@ on:
 jobs:
   build-macos:
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: pynn-macos
+            command: npm run make
+          - artifact: pynn-macos-intel
+            command: npm run make:mac:intel
     defaults:
       run:
         working-directory: electron
@@ -62,7 +70,7 @@ jobs:
           rm -f "$CERTIFICATE_PATH"
 
       - name: Package macOS
-        run: npm run make
+        run: ${{ matrix.command }}
         env:
           APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -73,7 +81,7 @@ jobs:
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pynn-macos
+          name: ${{ matrix.artifact }}
           path: electron/out/make
 
   build-windows:

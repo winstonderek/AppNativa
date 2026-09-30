@@ -4,6 +4,7 @@ import {
   MenuItem,
   WebContents,
   app,
+  dialog,
   nativeTheme,
   screen,
   session,
@@ -48,6 +49,12 @@ const MACOS_WINDOW_CHROME: Partial<Electron.BrowserWindowConstructorOptions> = {
   titleBarStyle: 'default',
 };
 
+/** Windows title bar shows the running version. macOS keeps the plain app name. */
+function windowTitle(detail?: string): string {
+  const base = process.platform === 'win32' ? `${APP_NAME} ${app.getVersion()}` : APP_NAME;
+  return detail ? `${base} - ${detail}` : base;
+}
+
 function getPlatformWindowOptions(): Partial<Electron.BrowserWindowConstructorOptions> {
   if (process.platform === 'darwin') {
     return MACOS_WINDOW_CHROME;
@@ -88,7 +95,7 @@ export function getPopupWindowOptions(): Electron.BrowserWindowConstructorOption
     minWidth: 640,
     minHeight: 480,
     autoHideMenuBar: true,
-    title: APP_NAME,
+    title: windowTitle(),
     ...getPlatformWindowOptions(),
     webPreferences: getWebPreferences('popup'),
   };
@@ -101,7 +108,7 @@ export function getCheckoutWindowOptions(): Electron.BrowserWindowConstructorOpt
     minWidth: 480,
     minHeight: 640,
     autoHideMenuBar: true,
-    title: APP_NAME,
+    title: windowTitle(),
     ...getPlatformWindowOptions(),
     webPreferences: getWebPreferences('checkout'),
   };
@@ -114,7 +121,7 @@ export function getOAuthWindowOptions(): Electron.BrowserWindowConstructorOption
     minWidth: MIN_OAUTH_WINDOW_WIDTH,
     minHeight: MIN_OAUTH_WINDOW_HEIGHT,
     autoHideMenuBar: true,
-    title: `${APP_NAME} - Connect calendar`,
+    title: windowTitle('Connect calendar'),
     ...getPlatformWindowOptions(),
     webPreferences: getWebPreferences('oauth'),
   };
@@ -211,7 +218,7 @@ export function createAppWindow(init: AppWindowInit = {}): BrowserWindow {
     minHeight: init.minHeight ?? MIN_WINDOW_HEIGHT,
     alwaysOnTop: init.alwaysOnTop ?? false,
     show: false,
-    title: APP_NAME,
+    title: windowTitle(),
     ...getPlatformWindowOptions(),
     autoHideMenuBar: false,
     webPreferences: getWebPreferences(role, init.callsSuppressed ?? false),
@@ -252,7 +259,7 @@ export function createAppWindow(init: AppWindowInit = {}): BrowserWindow {
 
   window.on('page-title-updated', (event) => {
     event.preventDefault();
-    window.setTitle(APP_NAME);
+    window.setTitle(windowTitle());
   });
 
   window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -357,7 +364,7 @@ export function createPopupWindow(url: string, parent?: WebContents): BrowserWin
 
     popup.on('page-title-updated', (event) => {
       event.preventDefault();
-      popup.setTitle(APP_NAME);
+      popup.setTitle(windowTitle());
     });
 
     popup.loadURL(url).catch((err) => {
@@ -575,7 +582,7 @@ export function openOAuthWindow(url: string): BrowserWindow | null {
 
     window.on('page-title-updated', (event) => {
       event.preventDefault();
-      window.setTitle(`${APP_NAME} - Connect calendar`);
+      window.setTitle(windowTitle('Connect calendar'));
     });
 
     logger.info(`Opening calendar sign-in window: ${urlForLog(url)}`);
@@ -606,7 +613,7 @@ function attachOAuthWindowHandlers(window: BrowserWindow): void {
     }
     childWindow.on('page-title-updated', (event) => {
       event.preventDefault();
-      childWindow.setTitle(`${APP_NAME} - Connect calendar`);
+      childWindow.setTitle(windowTitle('Connect calendar'));
     });
     childWindow.on('closed', () => {
       popupWindows.delete(childWindow);
@@ -710,6 +717,24 @@ function setupKeyboardShortcuts(window: BrowserWindow): void {
       }
     }
   });
+}
+
+/** macOS uses the native About panel (`role: 'about'`). Windows and Linux do not. */
+function showAboutDialog(): void {
+  const options: Electron.MessageBoxOptions = {
+    type: 'info',
+    title: `About ${APP_NAME}`,
+    message: APP_NAME,
+    detail: `Version ${app.getVersion()}`,
+    buttons: ['OK'],
+    noLink: true,
+  };
+  const parent = BrowserWindow.getFocusedWindow();
+  if (parent && !parent.isDestroyed()) {
+    void dialog.showMessageBox(parent, options);
+    return;
+  }
+  void dialog.showMessageBox(options);
 }
 
 export function buildApplicationMenu(): void {
@@ -830,6 +855,11 @@ export function buildApplicationMenu(): void {
           click: () => {
             void import('electron').then(({ shell }) => shell.openExternal(APP_URL));
           },
+        },
+        { type: 'separator' },
+        {
+          label: `About ${APP_NAME}`,
+          click: () => showAboutDialog(),
         },
       ],
     });

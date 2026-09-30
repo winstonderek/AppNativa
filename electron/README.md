@@ -197,12 +197,12 @@ Packaged builds check for a new GitHub Release 10 seconds after launch, download
 
 Workflow: `.github/workflows/build-desktop.yml`
 
-- **macOS** (`macos-latest`) → `.dmg` + `.zip` + `latest-mac.yml`
+- **macOS** (`macos-latest`) → Apple Silicon `.dmg` + `.zip` + `latest-mac.yml`, and a separate Intel `intel-pynn.dmg`
 - **Windows** (`windows-latest`) → Squirrel `.exe` / `.nupkg` / `RELEASES` + `.zip` + `latest.yml`
 - Push to `main` or a PR → build artifacts only
 - Tag `v*` → same build, then a non-draft GitHub Release with those assets
 
-CI currently builds **arm64 macOS** (`macos-latest`). Intel Macs need a separate `darwin/x64` (or universal) job if you support them.
+CI builds **arm64** on `macos-latest`, plus a `darwin/x64` DMG named `intel-pynn.dmg`. The Intel build is the installer only; auto-update stays on the Apple Silicon zip.
 
 ## Native notifications
 
