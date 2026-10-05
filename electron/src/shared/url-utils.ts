@@ -41,7 +41,7 @@ export function isPrimaryHost(hostname: string): boolean {
   }
 
   // Development against `pnpm dev`: camera, mic and in-app navigation must work
-  // on localhost / angelhive.localhost without treating them as external.
+  // on localhost / app.localhost without treating them as external.
   return process.env.NODE_ENV === 'development' && isLocalDevHost(host);
 }
 

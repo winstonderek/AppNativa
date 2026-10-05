@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { app, BrowserWindow, dialog } from 'electron';
+import { app, autoUpdater as squirrelUpdater, BrowserWindow, dialog, shell } from 'electron';
 import { autoUpdater, type UpdateDownloadedEvent } from 'electron-updater';
 import {
   APP_NAME,
@@ -15,11 +15,19 @@ import { logger, isDevelopment } from './logger';
 import { isSquirrelInstall } from './squirrel';
 import { destroyTray } from './tray';
 
+/**
+ * Squirrel.Windows reads `<feed>/RELEASES` and then `<feed>/<name>-full.nupkg`.
+ * GitHub redirects both to the assets of the latest published release.
+ */
+const WINDOWS_UPDATE_FEED_URL = `https://github.com/${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO}/releases/latest/download`;
+const RELEASES_PAGE_URL = `https://github.com/${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO}/releases/latest`;
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
 let initialized = false;
 let isManualCheck = false;
+let checkInProgress = false;
 let installingUpdate = false;
-let windowsSetupSpawned = false;
-let pendingWindowsSetup: { version: string; filePath: string } | null = null;
+let downloadedVersion: string | null = null;
 
 export function isInstallingUpdate(): boolean {
   return installingUpdate;
@@ -52,33 +60,6 @@ function spawnDetached(exe: string, args: string[]): void {
     windowsHide: true,
   });
   child.unref();
-}
-
-/**
- * latest.yml points at Squirrel's Setup.exe. That installer cannot replace
- * files while this process is still running, and electron-updater would
- * launch it with NSIS flags the Squirrel setup ignores.
- * Wait until this process exits, then start Setup.exe so the new version
- * is what opens afterwards.
- */
-function launchPendingWindowsSetup(): void {
-  if (!pendingWindowsSetup || windowsSetupSpawned) return;
-  if (!fs.existsSync(pendingWindowsSetup.filePath)) return;
-
-  windowsSetupSpawned = true;
-  const filePath = pendingWindowsSetup.filePath.replace(/'/g, "''");
-  const command = [
-    `Wait-Process -Id ${process.pid} -ErrorAction SilentlyContinue`,
-    `Start-Process -FilePath '${filePath}'`,
-  ].join('; ');
-
-  const child = spawn(
-    'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', command],
-    { detached: true, stdio: 'ignore', windowsHide: true },
-  );
-  child.unref();
-  logger.info(`Will start Windows installer for ${pendingWindowsSetup.version} after quit`);
 }
 
 function newestInstalledVersion(root: string): string | null {
@@ -135,8 +116,13 @@ export function handoffToUpdatedWindowsInstall(): boolean {
   return true;
 }
 
+/** Only Squirrel installs can update in place; the portable zip cannot. */
+function canAutoUpdate(): boolean {
+  return process.platform !== 'win32' || isSquirrelInstall();
+}
+
 function installDownloadedUpdate(): void {
-  logger.info('Installing downloaded update');
+  logger.info(`Installing downloaded update ${downloadedVersion ?? ''}`.trim());
   prepareAppToQuitForUpdate();
 
   // Wait until the message box is fully dismissed; calling quitAndInstall
@@ -144,8 +130,10 @@ function installDownloadedUpdate(): void {
   setImmediate(() => {
     try {
       if (process.platform === 'win32') {
-        launchPendingWindowsSetup();
-        app.quit();
+        // Squirrel already unpacked the new app-* folder. This runs
+        // `Update.exe --processStartAndWait`, which starts that version
+        // once this process has exited.
+        squirrelUpdater.quitAndInstall();
       } else {
         // quitAndInstall already asks ShipIt to replace the bundle, quit, and
         // relaunch. A following app.quit() or app.exit() kills the process
@@ -154,11 +142,12 @@ function installDownloadedUpdate(): void {
       }
     } catch (error) {
       logger.error('quitAndInstall failed', error);
+      app.quit();
     }
   });
 }
 
-function showRestartDialog(version?: string): void {
+function showRestartDialog(version: string | null): void {
   dialog
     .showMessageBox({
       type: 'info',
@@ -166,10 +155,11 @@ function showRestartDialog(version?: string): void {
       message: version
         ? `${APP_NAME} ${version} has been downloaded.`
         : 'A new version has been downloaded.',
-      detail: `Restart ${APP_NAME} to apply the update.`,
+      detail: `You are using version ${app.getVersion()}. Restart ${APP_NAME} to apply the update.`,
       buttons: ['Restart now', 'Later'],
       defaultId: 0,
       cancelId: 1,
+      noLink: true,
     })
     .then(({ response }) => {
       if (response !== 0) return;
@@ -183,20 +173,93 @@ function showUpToDateDialog(): void {
     type: 'info',
     title: 'Updates',
     message: `${APP_NAME} is up to date.`,
+    detail: `Version ${app.getVersion()}`,
+    noLink: true,
   });
+}
+
+function showCheckingDialog(): void {
+  void dialog.showMessageBox({
+    type: 'info',
+    title: 'Updates',
+    message: 'Checking for updates…',
+    detail: `Version ${app.getVersion()}. You will be notified when the download finishes.`,
+    noLink: true,
+  });
+}
+
+function showManualInstallDialog(): void {
+  dialog
+    .showMessageBox({
+      type: 'info',
+      title: 'Updates',
+      message: `This copy of ${APP_NAME} cannot update itself.`,
+      detail: `Version ${app.getVersion()}. Install ${APP_NAME} with Pynn-Setup.exe to get automatic updates.`,
+      buttons: ['Download installer', 'Close'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    })
+    .then(({ response }) => {
+      if (response === 0) void shell.openExternal(RELEASES_PAGE_URL);
+    })
+    .catch((err) => logger.error('Manual install dialog failed', err));
+}
+
+function handleUpdateNotAvailable(): void {
+  checkInProgress = false;
+  logger.info('No updates available');
+  if (isManualCheck) {
+    isManualCheck = false;
+    showUpToDateDialog();
+  }
+}
+
+function handleUpdateDownloaded(version: string | null): void {
+  checkInProgress = false;
+  if (version && !isNewerVersion(version, app.getVersion())) {
+    logger.info(`Already running ${app.getVersion()}; ignoring update ${version}`);
+    isManualCheck = false;
+    return;
+  }
+  downloadedVersion = version;
+  logger.info(`Update downloaded: ${version ?? 'unknown version'}`);
+  isManualCheck = false;
+  showRestartDialog(version);
+}
+
+function handleUpdateError(error: Error): void {
+  checkInProgress = false;
+  logger.error('Auto-updater error', error);
+  if (isManualCheck) {
+    isManualCheck = false;
+    dialog.showErrorBox('Update check failed', error.message);
+  }
+}
+
+function setupWindowsUpdater(): void {
+  squirrelUpdater.setFeedURL({ url: WINDOWS_UPDATE_FEED_URL });
+
+  squirrelUpdater.on('checking-for-update', () => {
+    logger.info('Checking for updates…');
+  });
+
+  squirrelUpdater.on('update-available', () => {
+    logger.info('Update available (downloading)');
+  });
+
+  squirrelUpdater.on('update-not-available', handleUpdateNotAvailable);
+
+  squirrelUpdater.on('update-downloaded', (_event, _releaseNotes, releaseName) => {
+    handleUpdateDownloaded(releaseName || null);
+  });
+
+  squirrelUpdater.on('error', handleUpdateError);
 }
 
 function setupElectronUpdater(): void {
   autoUpdater.autoDownload = true;
-  // Windows artifacts are Squirrel setup files, not NSIS. Silent install-on-quit
-  // passes NSIS flags and leaves the old app in place.
-  autoUpdater.autoInstallOnAppQuit = process.platform !== 'win32';
-  if (process.platform === 'win32') {
-    app.on('before-quit', () => {
-      if (installingUpdate) return;
-      launchPendingWindowsSetup();
-    });
-  }
+  autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.logger = {
     info: (message) => logger.info(String(message)),
     warn: (message) => logger.warn(String(message)),
@@ -218,48 +281,45 @@ function setupElectronUpdater(): void {
     logger.info(`Update available: ${info.version} (downloading)`);
   });
 
-  autoUpdater.on('update-not-available', () => {
-    logger.info('No updates available');
-    if (isManualCheck) {
-      isManualCheck = false;
-      showUpToDateDialog();
-    }
-  });
+  autoUpdater.on('update-not-available', handleUpdateNotAvailable);
 
   autoUpdater.on('download-progress', (progress) => {
     logger.debug(`Download progress: ${Math.round(progress.percent)}%`);
   });
 
   autoUpdater.on('update-downloaded', (info: UpdateDownloadedEvent) => {
-    if (!isNewerVersion(info.version, app.getVersion())) {
-      logger.info(`Already running ${app.getVersion()}; ignoring update ${info.version}`);
-      isManualCheck = false;
-      return;
-    }
-    if (process.platform === 'win32' && info.downloadedFile) {
-      pendingWindowsSetup = { version: info.version, filePath: info.downloadedFile };
-    }
-    logger.info(`Update downloaded: ${info.version}`);
-    isManualCheck = false;
-    showRestartDialog(info.version);
+    handleUpdateDownloaded(info.version);
   });
 
-  autoUpdater.on('error', (error) => {
-    logger.error('Auto-updater error', error);
-    if (isManualCheck) {
-      isManualCheck = false;
-      dialog.showErrorBox('Update check failed', error.message);
-    }
-  });
+  autoUpdater.on('error', handleUpdateError);
 }
 
 function checkForUpdates(): void {
-  autoUpdater.checkForUpdates().catch((err) => {
-    logger.warn('Update check failed', err.message);
+  if (downloadedVersion !== null) {
     if (isManualCheck) {
       isManualCheck = false;
-      dialog.showErrorBox('Update check failed', err.message);
+      showRestartDialog(downloadedVersion);
     }
+    return;
+  }
+
+  if (checkInProgress) {
+    if (isManualCheck) showCheckingDialog();
+    return;
+  }
+  checkInProgress = true;
+
+  if (process.platform === 'win32') {
+    try {
+      squirrelUpdater.checkForUpdates();
+    } catch (error) {
+      handleUpdateError(error instanceof Error ? error : new Error(String(error)));
+    }
+    return;
+  }
+
+  autoUpdater.checkForUpdates().catch((err: Error) => {
+    handleUpdateError(err);
   });
 }
 
@@ -269,10 +329,19 @@ function initializeUpdater(): boolean {
     return false;
   }
 
+  if (!canAutoUpdate()) {
+    logger.info('Auto-updater skipped (not a Squirrel install)');
+    return false;
+  }
+
   if (initialized) return true;
 
   initialized = true;
-  setupElectronUpdater();
+  if (process.platform === 'win32') {
+    setupWindowsUpdater();
+  } else {
+    setupElectronUpdater();
+  }
   return true;
 }
 
@@ -282,6 +351,10 @@ export function setupAutoUpdater(): void {
   setTimeout(() => {
     checkForUpdates();
   }, 10_000);
+
+  setInterval(() => {
+    checkForUpdates();
+  }, UPDATE_CHECK_INTERVAL_MS);
 }
 
 export function checkForUpdatesManually(): void {
@@ -290,7 +363,13 @@ export function checkForUpdatesManually(): void {
       type: 'info',
       title: 'Updates',
       message: 'Auto-update is disabled in development.',
+      detail: `Version ${app.getVersion()}`,
     });
+    return;
+  }
+
+  if (!canAutoUpdate()) {
+    showManualInstallDialog();
     return;
   }
 

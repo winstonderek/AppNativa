@@ -19,7 +19,7 @@ export const WINDOWS_SQUIRREL_EXE_NAME = 'pynn';
 export const WINDOWS_SQUIRREL_APP_ID = `com.squirrel.${WINDOWS_SQUIRREL_PACKAGE_ID}.${WINDOWS_SQUIRREL_EXE_NAME}`;
 
 /** Primary hostname — navigation in the main window stays on this domain and subdomains. */
-export const PRIMARY_HOST = 'angelhive.pynn.ai';
+export const PRIMARY_HOST = 'app.pynn.ai';
 
 /** Override with PYNN_APP_URL to point a local Electron build at another origin. */
 export const APP_URL = process.env.PYNN_APP_URL ?? `https://${PRIMARY_HOST}`;

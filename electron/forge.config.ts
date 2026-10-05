@@ -6,12 +6,14 @@ import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-nati
 import { PublisherGithub } from '@electron-forge/publisher-github';
 import path from 'node:path';
 import { generateUpdateManifests } from './scripts/generate-update-manifests';
+import { azureWindowsSignOptions } from './windows-sign-options';
 
 const windowsCertificateFile = process.env.WINDOWS_CERTIFICATE_FILE;
 const windowsCertificatePassword = process.env.WINDOWS_CERTIFICATE_PASSWORD;
+const azureSign = azureWindowsSignOptions();
 
-const windowsSign =
-  windowsCertificateFile && windowsCertificatePassword
+const pfxSign =
+  !azureSign && windowsCertificateFile && windowsCertificatePassword
     ? {
         certificateFile: windowsCertificateFile,
         certificatePassword: windowsCertificatePassword,
@@ -60,7 +62,7 @@ const config: ForgeConfig = {
             teamId: process.env.APPLE_TEAM_ID!,
           }
         : undefined,
-    ...(windowsSign ? { windowsSign } : {}),
+    ...(azureSign ? { windowsSign: azureSign } : pfxSign ? { windowsSign: pfxSign } : {}),
   },
   rebuildConfig: {},
   makers: [
@@ -74,12 +76,14 @@ const config: ForgeConfig = {
       iconUrl:
         process.env.SQUIRREL_ICON_URL ||
         'https://raw.githubusercontent.com/winstonderek/AppNativa/main/electron/assets/icon.ico',
-      ...(windowsSign
-        ? {
-            certificateFile: windowsCertificateFile!,
-            certificatePassword: windowsCertificatePassword,
-          }
-        : {}),
+      ...(azureSign
+        ? { windowsSign: azureSign }
+        : windowsCertificateFile && windowsCertificatePassword
+          ? {
+              certificateFile: windowsCertificateFile,
+              certificatePassword: windowsCertificatePassword,
+            }
+          : {}),
     }),
     new MakerZIP({}, ['darwin', 'win32']),
     new MakerDMG((arch) => ({

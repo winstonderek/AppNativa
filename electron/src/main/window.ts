@@ -846,6 +846,10 @@ export function buildApplicationMenu(): void {
       label: 'Help',
       submenu: [
         {
+          label: `Version ${app.getVersion()}`,
+          enabled: false,
+        },
+        {
           label: 'Check for Updates…',
           click: () => checkForUpdatesManually(),
         },

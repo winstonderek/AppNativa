@@ -3,6 +3,7 @@ import path from 'node:path';
 import { APP_NAME } from '../shared/constants';
 import { focusMainWindow, hideMainWindow } from './window';
 import { logger } from './logger';
+import { checkForUpdatesManually } from './updater';
 
 let tray: Tray | null = null;
 
@@ -30,9 +31,18 @@ export function setupTray(): Tray | null {
 
     const trayIcon = icon.resize({ width: 16, height: 16 });
     tray = new Tray(trayIcon);
-    tray.setToolTip(APP_NAME);
+    tray.setToolTip(`${APP_NAME} ${app.getVersion()}`);
 
     const contextMenu = Menu.buildFromTemplate([
+      {
+        label: `${APP_NAME} version ${app.getVersion()}`,
+        enabled: false,
+      },
+      {
+        label: 'Check for Updates…',
+        click: () => checkForUpdatesManually(),
+      },
+      { type: 'separator' },
       {
         label: `Open ${APP_NAME}`,
         click: () => focusMainWindow(),

@@ -1,6 +1,6 @@
 # Pynn Desktop
 
-Official cross-platform desktop client for [Pynn](https://angelhive.pynn.ai).
+Official cross-platform desktop client for [Pynn](https://app.pynn.ai).
 
 This project is **completely independent** from the Pynn web application. It loads the remote web app over HTTPS inside a secure Electron shell — no changes to the Next.js codebase are required.
 
@@ -19,7 +19,7 @@ npm install
 npm start
 ```
 
-This opens Pynn in a desktop window at `https://angelhive.pynn.ai`.
+This opens Pynn in a desktop window at `https://app.pynn.ai`.
 
 ## Scripts
 
@@ -81,7 +81,7 @@ Examples (prepared for future use):
 - `sandbox: true`
 - `webSecurity: true` (never disabled)
 - Remote content treated as untrusted
-- Navigation restricted on the main window to `angelhive.pynn.ai` and subdomains
+- Navigation restricted on the main window to `app.pynn.ai` and subdomains
 - Stripe Checkout / Customer Portal (`checkout.stripe.com`, `billing.stripe.com`, `pay.stripe.com`) open in an in-app window; success/cancel URLs return to the main window
 - Google and Outlook calendar connect open in a smaller in-app window (macOS and Windows). Provider pages stay in that window; the return to Pynn is loaded in the main window. The web app is unchanged
 - Other external links validated before `shell.openExternal()`
@@ -109,9 +109,15 @@ Generate proper platform icons from your PNG using [icon-gen](https://www.npmjs.
 | `APPLE_TEAM_ID` | 10-character Apple Developer Team ID |
 | `APPLE_CERTIFICATE` | Base64 of the Developer ID Application `.p12` (CI) |
 | `APPLE_CERTIFICATE_PASSWORD` | Password of that `.p12` |
-| `WINDOWS_CERTIFICATE` | Base64 of the Authenticode `.pfx` (CI) |
-| `WINDOWS_CERTIFICATE_FILE` | Path to the `.pfx` on disk (set automatically in CI) |
+| `WINDOWS_CERTIFICATE` | Base64 of an Authenticode `.pfx`, only if you are not using Azure Artifact Signing |
+| `WINDOWS_CERTIFICATE_FILE` | Path to that `.pfx` on disk (set automatically in CI) |
 | `WINDOWS_CERTIFICATE_PASSWORD` | Password of that `.pfx` |
+| `AZURE_CLIENT_ID` | App registration used by GitHub to sign on tag builds |
+| `AZURE_TENANT_ID` | Entra tenant of that app |
+| `AZURE_SUBSCRIPTION_ID` | Subscription that owns the Artifact Signing account |
+| `AZURE_CODESIGNING_ENDPOINT` | Regional endpoint, e.g. `https://weu.codesigning.azure.net` |
+| `AZURE_CODESIGNING_ACCOUNT` | Artifact Signing account name |
+| `AZURE_CERTIFICATE_PROFILE` | Certificate profile name (Public Trust) |
 | `SQUIRREL_ICON_URL` | HTTPS URL of `icon.ico` for Squirrel shortcuts |
 | `GITHUB_TOKEN` | GitHub Releases publishing |
 | `GITHUB_REPOSITORY_OWNER` | Publisher config override |
@@ -130,8 +136,14 @@ Add these as **GitHub Actions secrets** (repo → **Settings → Secrets and var
 | `APPLE_ID` | Your Apple ID email |
 | `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password from [appleid.apple.com](https://appleid.apple.com) (`xxxx-xxxx-xxxx-xxxx`) |
 | `APPLE_TEAM_ID` | 10-character Team ID from [developer.apple.com/account](https://developer.apple.com/account) |
-| `WINDOWS_CERTIFICATE` | Base64 of the Authenticode `.pfx` |
+| `WINDOWS_CERTIFICATE` | Base64 of an Authenticode `.pfx`. Leave empty when using Azure Artifact Signing |
 | `WINDOWS_CERTIFICATE_PASSWORD` | Password of that `.pfx` |
+| `AZURE_CLIENT_ID` | App registration client ID. Put these six on the GitHub **environment** named `signing`, not as repo secrets |
+| `AZURE_TENANT_ID` | Directory (tenant) ID |
+| `AZURE_SUBSCRIPTION_ID` | Subscription ID |
+| `AZURE_CODESIGNING_ENDPOINT` | Endpoint shown on the Artifact Signing account |
+| `AZURE_CODESIGNING_ACCOUNT` | Account name |
+| `AZURE_CERTIFICATE_PROFILE` | Certificate profile name |
 | `SQUIRREL_ICON_URL` | `https://raw.githubusercontent.com/winstonderek/AppNativa/main/electron/assets/icon.ico` |
 
 ### macOS
@@ -155,25 +167,34 @@ Add these as **GitHub Actions secrets** (repo → **Settings → Secrets and var
 5. Create an **app-specific password** at appleid.apple.com → Sign-In and Security → App-Specific Passwords. Put it in `APPLE_APP_SPECIFIC_PASSWORD`. Do **not** use your Apple ID login password.
 6. Hardened runtime entitlements are in `entitlements.plist` (camera, mic, screen recording, network).
 
-### Windows
+### Windows (Azure Artifact Signing)
 
-This path needs an exportable Authenticode `.pfx` (OV/EV that you can export, or a legacy software cert). If you only have **Azure Trusted Signing** or a USB hardware token, signing will not pick up these secrets — say so and we can wire that instead.
+Tag builds (`v*`) sign `pynn.exe`, the DLLs inside the package, and `Pynn-Setup.exe` with Azure Artifact Signing. There is no `.pfx`: the private key stays in Azure. Branch and pull-request builds are not signed.
 
-1. Export the cert as `.pfx` with a password (include the private key).
-2. Encode for GitHub (PowerShell):
+Do this once. Identity validation on the signing account must already be **Completed**, and the certificate profile must be **Public Trust**.
 
-   ```powershell
-   [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\pynn.pfx")) | Set-Clipboard
-   ```
+1. In Entra ID, create an app registration (or reuse the one you created for Artifact Signing).
+2. On that app, add a **federated credential**:
+   - Issuer: `https://token.actions.githubusercontent.com`
+   - Organization `winstonderek`, repository `AppNativa`
+   - Entity type **Environment**, name `signing`
+   - Subject ends up as `repo:winstonderek/AppNativa:environment:signing`
+3. On the Artifact Signing account → **Access control**, give that app the role **Artifact Signing Certificate Profile Signer**.
+4. In GitHub → **Settings → Environments**, create an environment named `signing`. Do not add required reviewers, or the release will wait for a click.
+5. On that environment (not as repository secrets), add `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CODESIGNING_ENDPOINT`, `AZURE_CODESIGNING_ACCOUNT`, and `AZURE_CERTIFICATE_PROFILE`. The endpoint is the one shown on the account, for example `https://weu.codesigning.azure.net`.
+6. Push a version tag. The Windows job signs in with that app, and the build fails if `Pynn-Setup.exe` does not have a valid signature.
 
-   Paste that into `WINDOWS_CERTIFICATE`. Put the PFX password in `WINDOWS_CERTIFICATE_PASSWORD`.
-3. Squirrel.Windows produces `Pynn-Setup.exe`. Forge signs both the packaged `pynn.exe` and the installer when those secrets are present.
+A `.pfx` still works for a local or CI build that is not a tag: set `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD`. A tag build ignores the `.pfx` and uses Azure.
 
-Signing is skipped when secrets are not configured — builds still succeed for testing.
+Signing is skipped when this environment is not used — branch builds still succeed for testing.
 
 ## Auto-update
 
-Packaged builds check for a new GitHub Release 10 seconds after launch, download it in the background, then ask the user to restart. **Help → Check for Updates…** (Windows) or **Pynn → Check for Updates…** (macOS) runs the same check immediately. Disabled in development.
+Packaged builds check for a new GitHub Release 10 seconds after launch and every 4 hours, download it in the background, then ask the user to restart. **Restart now** quits and reopens the app on the new version. **Help → Check for Updates…** or the tray menu (Windows) and **Pynn → Check for Updates…** (macOS) run the same check immediately. Disabled in development.
+
+The installed version is shown in the Windows title bar, the tray menu and tooltip, **Help → Version** / **Help → About Pynn**, and every update dialog. On macOS it is in **Pynn → About Pynn**.
+
+On Windows the update goes through Electron's built-in Squirrel updater: `Update.exe` downloads the `.nupkg` into a new `app-x.y.z` folder, and `quitAndInstall` starts that version once the old process exits. The portable `.zip` cannot self-update; **Check for Updates…** points those users to the installer.
 
 | Platform | Mechanism |
 |----------|-----------|
@@ -191,7 +212,7 @@ Packaged builds check for a new GitHub Release 10 seconds after launch, download
    - Windows: `Pynn-Setup.exe`, `RELEASES`, `*.nupkg`, `latest.yml`
 6. Restart a packaged client (or use **Check for Updates…**). It should download and offer to restart.
 
-`latest.yml` / `latest-mac.yml` are generated by the Forge `postMake` hook. `app-update.yml` is bundled into the app resources so `electron-updater` knows which GitHub repo to query.
+`latest.yml` / `latest-mac.yml` are generated by the Forge `postMake` hook. Windows builds from 1.0.8 on do not read `latest.yml`; it stays in the release for clients on 1.0.7 and earlier. `app-update.yml` is bundled into the app resources so `electron-updater` knows which GitHub repo to query.
 
 ## GitHub Actions
 
@@ -282,7 +303,7 @@ The app detects system light/dark mode via `nativeTheme` but does **not** overri
 
 - [ ] Window resize, maximize, minimize
 - [ ] Window position/size remembered
-- [ ] `angelhive.pynn.ai` links open in a new in-app window
+- [ ] `app.pynn.ai` links open in a new in-app window
 - [ ] Stripe Checkout / billing portal stay inside the desktop app
 - [ ] After paying or cancelling, the main window shows the Pynn return URL
 - [ ] External links open in default browser

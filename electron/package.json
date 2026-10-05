@@ -1,7 +1,7 @@
 {
   "name": "pynn-desktop",
   "productName": "Pynn",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Official Pynn desktop client",
   "main": "dist/main/main.js",
   "author": "Pynn",
@@ -41,6 +41,7 @@
     "@electron-forge/plugin-auto-unpack-natives": "^7.7.0",
     "@electron-forge/publisher-github": "^7.7.0",
     "@electron/fuses": "^1.8.0",
+    "@electron/windows-sign": "^1.2.2",
     "@types/node": "^22.13.4",
     "cross-env": "^7.0.3",
     "electron": "^34.2.0",

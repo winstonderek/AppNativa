@@ -4,7 +4,7 @@ Repository for the **Pynn** native desktop client.
 
 ## Pynn Desktop
 
-The Electron desktop application lives in [`electron/`](electron/). It loads the production web app at https://angelhive.pynn.ai without modifying the web codebase.
+The Electron desktop application lives in [`electron/`](electron/). It loads the production web app at https://app.pynn.ai without modifying the web codebase.
 
 ```bash
 cd electron
