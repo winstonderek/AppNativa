@@ -1,4 +1,4 @@
-import { HASHES, type SignToolOptions } from '@electron/windows-sign';
+import type { SignToolOptions } from '@electron/windows-sign';
 
 /**
  * Azure Artifact Signing (formerly Trusted Signing) has no exportable .pfx.
@@ -14,7 +14,7 @@ export function azureWindowsSignOptions(): SignToolOptions | undefined {
   return {
     ...(process.env.SIGNTOOL_PATH ? { signToolPath: process.env.SIGNTOOL_PATH } : {}),
     timestampServer: 'http://timestamp.acs.microsoft.com',
-    hashes: [HASHES.sha256],
+    hashes: ['sha256'] as NonNullable<SignToolOptions['hashes']>,
     // /a makes signtool look for a local cert and ignore the dlib.
     automaticallySelectCertificate: false,
     signWithParams: ['/v', '/debug', '/dlib', dlib, '/dmdf', metadata],
