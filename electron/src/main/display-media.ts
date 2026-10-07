@@ -29,6 +29,12 @@ interface ScreenPickerPayload {
 
 let pickerOpen = false;
 
+/** Sources from the picker's last listing, so the chosen one is granted without a second query. */
+const listedSources = new Map<string, DesktopCapturerSource>();
+
+/** desktopCapturer.getSources fails on macOS when two queries overlap, so they run one at a time. */
+let sourcesQueue: Promise<unknown> = Promise.resolve();
+
 function isTrustedOrigin(origin: string): boolean {
   try {
     return isPrimaryHost(new URL(origin).hostname);
@@ -80,13 +86,20 @@ function isInternalPickerSource(source: DesktopCapturerSource): boolean {
   );
 }
 
-async function listCapturableSources(): Promise<DesktopCapturerSource[]> {
-  const sources = await desktopCapturer.getSources({
-    types: ['screen', 'window'],
-    thumbnailSize: { width: 320, height: 180 },
-    fetchWindowIcons: true,
+function listCapturableSources(): Promise<DesktopCapturerSource[]> {
+  const query = sourcesQueue.then(async () => {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen', 'window'],
+      thumbnailSize: { width: 320, height: 180 },
+      fetchWindowIcons: true,
+    });
+    const capturable = sources.filter((source) => !isInternalPickerSource(source));
+    listedSources.clear();
+    for (const source of capturable) listedSources.set(source.id, source);
+    return capturable;
   });
-  return sources.filter((source) => !isInternalPickerSource(source));
+  sourcesQueue = query.catch(() => undefined);
+  return query;
 }
 
 function openScreenRecordingSettings(): void {
@@ -164,7 +177,7 @@ function pickDisplaySource(parent: BrowserWindow | null): Promise<string | null>
         if (picker.isDestroyed()) return;
         picker.webContents.send(IPC_CHANNELS.screenPickerSources, payload);
       } catch (error) {
-        logger.error('Failed to list screen sources', error);
+        logger.error(`Failed to list screen sources (screen access: ${screenAccessStatus()})`, error);
         if (!picker.isDestroyed()) {
           picker.webContents.send(IPC_CHANNELS.screenPickerSources, {
             sources: [],
@@ -207,11 +220,20 @@ function pickDisplaySource(parent: BrowserWindow | null): Promise<string | null>
 export function setupDisplayMediaHandler(): void {
   session.defaultSession.setDisplayMediaRequestHandler(
     (request, callback) => {
+      let responded = false;
+      const respond = (streams: Electron.Streams | null) => {
+        if (responded) return;
+        responded = true;
+        // Denying must pass null: `{}` throws "Video was requested, but no video
+        // stream was provided" and getDisplayMedia in the page never settles.
+        callback(streams as Electron.Streams);
+      };
+
       void (async () => {
         try {
           if (!isTrustedOrigin(request.securityOrigin)) {
             logger.info(`Display media denied for ${request.securityOrigin}`);
-            callback({});
+            respond(null);
             return;
           }
 
@@ -219,32 +241,33 @@ export function setupDisplayMediaHandler(): void {
           const sourceId = await pickDisplaySource(parent);
           if (!sourceId) {
             logger.debug('Screen share cancelled by user');
-            callback({});
+            respond(null);
             return;
           }
 
-          const sources = await desktopCapturer.getSources({
-            types: ['screen', 'window'],
-            thumbnailSize: { width: 1, height: 1 },
-          });
-          const chosen = sources.find((source) => source.id === sourceId);
+          const chosen = listedSources.get(sourceId);
           if (!chosen) {
             logger.warn(`Chosen screen source disappeared: ${sourceId}`);
-            callback({});
+            respond(null);
             return;
           }
 
           logger.info(`Screen share granted: ${chosen.name}`);
-          callback({
+          respond({
             video: chosen,
-            audio: request.audioRequested ? 'loopback' : undefined,
+            // System audio loopback is only supported on Windows.
+            audio: request.audioRequested && process.platform === 'win32' ? 'loopback' : undefined,
           });
         } catch (error) {
           logger.error('Display media request failed', error);
-          callback({});
+          respond(null);
         }
       })();
     },
+    // macOS 15+ shows the native picker instead of invoking the handler. It
+    // grants access to the chosen screen or window without the Screen Recording
+    // privacy permission, which is what makes desktopCapturer.getSources fail.
+    { useSystemPicker: process.platform === 'darwin' },
   );
 
   logger.debug('Display media handler configured');
