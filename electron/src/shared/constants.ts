@@ -91,13 +91,23 @@ export const IPC_CHANNELS = {
   jsPromptPoll: 'pynn:js-prompt-poll',
   /** Prompt window → main: submitted value or null */
   jsPromptResult: 'pynn:js-prompt-result',
+  /** Renderer → main: open a prompt deeplink in Cursor, VS Code, Claude, Windsurf or Devin. */
+  openExternal: 'pynn:open-external',
 } as const;
+
+/**
+ * Height of the macOS window toolbar (back, forward, reload, new window).
+ * The page is inset by the same amount so it is not covered.
+ */
+export const MAC_TOOLBAR_HEIGHT = 36;
 
 /** Prefixes for webPreferences.additionalArguments, read synchronously by the sandboxed preload. */
 export const ARG_PREFIXES = {
   windowRole: '--pynn-window-role=',
   appVersion: '--pynn-app-version=',
   callsSuppressed: '--pynn-calls-suppressed=',
+  /** Present only on macOS windows that show the toolbar. Value is the inset in px. */
+  macToolbar: '--pynn-mac-toolbar=',
 } as const;
 
 /** Protocols opened via the system default handler (never executed as shell commands). */

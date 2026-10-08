@@ -24,10 +24,12 @@ const CHANNEL_JS_ALERT = 'pynn:js-alert';
 const CHANNEL_JS_CONFIRM = 'pynn:js-confirm';
 const CHANNEL_JS_PROMPT_OPEN = 'pynn:js-prompt-open';
 const CHANNEL_JS_PROMPT_POLL = 'pynn:js-prompt-poll';
+const CHANNEL_OPEN_EXTERNAL = 'pynn:open-external';
 
 const ARG_WINDOW_ROLE = '--pynn-window-role=';
 const ARG_APP_VERSION = '--pynn-app-version=';
 const ARG_CALLS_SUPPRESSED = '--pynn-calls-suppressed=';
+const ARG_MAC_TOOLBAR = '--pynn-mac-toolbar=';
 
 function readArg(prefix: string): string | null {
   const match = process.argv.find((arg) => arg.startsWith(prefix));
@@ -36,6 +38,73 @@ function readArg(prefix: string): string | null {
 
 const windowRole = (readArg(ARG_WINDOW_ROLE) ?? 'main') as WindowRole;
 const appVersion = readArg(ARG_APP_VERSION) ?? '';
+
+/**
+ * The macOS toolbar is a view painted on top of the page, and Electron does not
+ * let us shrink the window's own web contents. Pad the page by the same height
+ * and shrink full-viewport utilities so the app starts below the buttons.
+ */
+function installMacToolbarInset(): void {
+  const height = Number(readArg(ARG_MAC_TOOLBAR) ?? '');
+  if (!Number.isFinite(height) || height <= 0) return;
+
+  const px = `${height}px`;
+  const size = `calc(100vh - ${px})`;
+  const sizeDvh = `calc(100dvh - ${px})`;
+  const breakpoints = [
+    { prefix: '', query: '' },
+    { prefix: 'sm:', query: '@media (min-width: 640px)' },
+    { prefix: 'md:', query: '@media (min-width: 768px)' },
+    { prefix: 'lg:', query: '@media (min-width: 1024px)' },
+    { prefix: 'xl:', query: '@media (min-width: 1280px)' },
+    { prefix: '2xl:', query: '@media (min-width: 1536px)' },
+  ];
+  const utilities: Array<{ name: string; prop: string; value: string }> = [
+    { name: 'h-screen', prop: 'height', value: size },
+    { name: 'min-h-screen', prop: 'min-height', value: size },
+    { name: 'max-h-screen', prop: 'max-height', value: size },
+    { name: 'h-dvh', prop: 'height', value: sizeDvh },
+    { name: 'min-h-dvh', prop: 'min-height', value: sizeDvh },
+    { name: 'max-h-dvh', prop: 'max-height', value: sizeDvh },
+    { name: 'h-svh', prop: 'height', value: size },
+    { name: 'min-h-svh', prop: 'min-height', value: size },
+    { name: 'max-h-svh', prop: 'max-height', value: size },
+  ];
+
+  const widgetTops = ['top-1', 'top-2', 'top-3', 'top-3.5', 'top-4']
+    .map((name) => `[class~="fixed"][class~="${name}"] { margin-top: ${px} !important; }`)
+    .join('\n');
+  /**
+   * Side sheets and full-screen overlays are position:fixed against the window,
+   * so body padding does not move them. Stretch them between the toolbar and
+   * the bottom edge. Rails stay out of this: they are sticky, not inset-y-0.
+   */
+  const fullBleed = (prefix: string): string => {
+    const selectors = [
+      `[class~="fixed"][class~="${prefix}inset-0"]`,
+      `[class~="fixed"][class~="${prefix}inset-y-0"]`,
+      `[class~="fixed"][class~="${prefix}top-0"][class~="${prefix}bottom-0"]`,
+    ];
+    return `${selectors.join(',\n')} {\n  top: ${px} !important;\n  bottom: 0 !important;\n  height: auto !important;\n}`;
+  };
+  const rules: string[] = [
+    `body { padding-top: ${px} !important; box-sizing: border-box !important; }`,
+    widgetTops,
+    fullBleed(''),
+  ];
+
+  for (const bp of breakpoints) {
+    const body = utilities
+      .map((util) => `[class~="${bp.prefix}${util.name}"] { ${util.prop}: ${util.value} !important; }`)
+      .join('\n');
+    const block = bp.prefix ? `${body}\n${fullBleed(bp.prefix)}` : body;
+    rules.push(bp.query ? `${bp.query} {\n${block}\n}` : block);
+  }
+
+  webFrame.insertCSS(rules.join('\n'));
+}
+
+installMacToolbarInset();
 
 /**
  * Google refuses calendar consent when the user agent or client hints mention
@@ -154,6 +223,9 @@ contextBridge.exposeInMainWorld('pynnDesktop', {
    * Pynn window is focused.
    */
   showNotification: (payload: unknown) => ipcRenderer.send(CHANNEL_SHOW_NOTIFICATION, payload),
+
+  /** Open a prompt deeplink in a coding app. Main rejects anything else. */
+  openExternal: (url: string) => ipcRenderer.invoke(CHANNEL_OPEN_EXTERNAL, url),
 });
 
 // Consumed by the web app's isDesktopApp()/getDesktopAppInfo() helpers.
@@ -209,5 +281,50 @@ function patchPageDialogs(): void {
 
 patchPageDialogs();
 process.once('loaded', patchPageDialogs);
+
+/**
+ * The hosted web app opens a coding app with location.assign after an async call.
+ * Chromium drops that custom-protocol navigation once the click gesture expires,
+ * so hand prompt deeplinks to the main process instead.
+ */
+let cursorAssignPatchQueued = false;
+
+function patchCursorPromptLaunch(): void {
+  if (cursorAssignPatchQueued) return;
+  cursorAssignPatchQueued = true;
+  void webFrame.executeJavaScript(`
+    (() => {
+      if (window.__pynnCursorAssign) return;
+      window.__pynnCursorAssign = true;
+      const schemes = [
+        'cursor:',
+        'vscode:',
+        'vscode-insiders:',
+        'claude:',
+        'windsurf:',
+        'windsurf-next:',
+        'devin:',
+      ];
+      const assign = Location.prototype.assign;
+      Location.prototype.assign = function (url) {
+        const value = url == null ? '' : String(url);
+        const openExternal = window.pynnDesktop && window.pynnDesktop.openExternal;
+        const scheme = value.slice(0, value.indexOf(':') + 1).toLowerCase();
+        if (schemes.indexOf(scheme) !== -1 && openExternal) {
+          void Promise.resolve(openExternal(value)).then((opened) => {
+            if (!opened) assign.call(this, url);
+          });
+          return;
+        }
+        return assign.call(this, url);
+      };
+    })();
+  `).catch(() => {
+    cursorAssignPatchQueued = false;
+  });
+}
+
+patchCursorPromptLaunch();
+process.once('loaded', patchCursorPromptLaunch);
 
 export {};

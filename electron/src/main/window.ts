@@ -16,6 +16,7 @@ import {
   APP_URL,
   ARG_PREFIXES,
   DEFAULT_WINDOW_HEIGHT,
+  MAC_TOOLBAR_HEIGHT,
   DEFAULT_WINDOW_WIDTH,
   MIN_OAUTH_WINDOW_HEIGHT,
   MIN_OAUTH_WINDOW_WIDTH,
@@ -26,10 +27,11 @@ import {
   type WindowRole,
 } from '../shared/constants';
 import { chromeLikeUserAgent, isOAuthProviderHost, urlForLog } from '../shared/url-utils';
-import { setupDownloads } from './downloads';
+import { markDownloadShell, setupDownloads } from './downloads';
 import { setupExternalLinkHandlers, setupNavigationHandlers } from './external-links';
 import { setupContextMenu } from './context-menu';
 import { logger, isDevelopment } from './logger';
+import { attachMacToolbar } from './mac-toolbar';
 import { checkForUpdatesManually } from './updater';
 
 type WindowState = ReturnType<typeof windowStateKeeper>;
@@ -53,6 +55,19 @@ const MACOS_WINDOW_CHROME: Partial<Electron.BrowserWindowConstructorOptions> = {
 function windowTitle(detail?: string): string {
   const base = process.platform === 'win32' ? `${APP_NAME} ${app.getVersion()}` : APP_NAME;
   return detail ? `${base} - ${detail}` : base;
+}
+
+function usesMacToolbar(role: WindowRole): boolean {
+  return process.platform === 'darwin' && (role === 'main' || role === 'workspace' || role === 'talks');
+}
+
+/** Traffic lights sit in the toolbar instead of a separate title strip. */
+function macToolbarChrome(role: WindowRole): Partial<Electron.BrowserWindowConstructorOptions> {
+  if (!usesMacToolbar(role)) return {};
+  return {
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 12, y: Math.round((MAC_TOOLBAR_HEIGHT - 14) / 2) },
+  };
 }
 
 function getPlatformWindowOptions(): Partial<Electron.BrowserWindowConstructorOptions> {
@@ -145,6 +160,7 @@ function getWebPreferences(
       `${ARG_PREFIXES.windowRole}${role}`,
       `${ARG_PREFIXES.appVersion}${app.getVersion()}`,
       `${ARG_PREFIXES.callsSuppressed}${callsSuppressed}`,
+      ...(usesMacToolbar(role) ? [`${ARG_PREFIXES.macToolbar}${MAC_TOOLBAR_HEIGHT}`] : []),
     ],
   };
 }
@@ -220,6 +236,7 @@ export function createAppWindow(init: AppWindowInit = {}): BrowserWindow {
     show: false,
     title: windowTitle(),
     ...getPlatformWindowOptions(),
+    ...macToolbarChrome(role),
     autoHideMenuBar: false,
     webPreferences: getWebPreferences(role, init.callsSuppressed ?? false),
   });
@@ -237,6 +254,9 @@ export function createAppWindow(init: AppWindowInit = {}): BrowserWindow {
   setupNavigationHandlers(window.webContents);
   setupExternalLinkHandlers(window);
   setupDownloads(window.webContents);
+  if (usesMacToolbar(role)) {
+    attachMacToolbar(window, openAnotherWindow);
+  }
   setupContextMenu(window.webContents);
   setupKeyboardShortcuts(window);
 
@@ -349,6 +369,7 @@ export function createPopupWindow(url: string, parent?: WebContents): BrowserWin
   try {
     const popup = new BrowserWindow({
       ...getPopupWindowOptions(),
+      show: false,
       parent: parent ? BrowserWindow.fromWebContents(parent) ?? undefined : undefined,
       modal: false,
     });
@@ -356,6 +377,7 @@ export function createPopupWindow(url: string, parent?: WebContents): BrowserWin
     popupWindows.add(popup);
     setupNavigationHandlers(popup.webContents, { isPopup: true });
     setupDownloads(popup.webContents);
+    markDownloadShell(popup);
     setupContextMenu(popup.webContents);
 
     popup.on('closed', () => {

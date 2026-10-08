@@ -1,9 +1,11 @@
 import {
   BrowserWindow,
   HandlerDetails,
+  ipcMain,
   shell,
   WebContents,
 } from 'electron';
+import { IPC_CHANNELS } from '../shared/constants';
 import {
   classifyUrl,
   deepLinkToAppUrl,
@@ -11,10 +13,14 @@ import {
   isAllowedMainNavigation,
   isAllowedPopupNavigation,
   isCalendarOAuthFlowUrl,
+  isPromptAppDeeplink,
+  isPrimaryHost,
   isSafeForExternalOpen,
   normalizeUrl,
+  parseUrl,
   urlForLog,
 } from '../shared/url-utils';
+import { markDownloadShell } from './downloads';
 import { logger } from './logger';
 import {
   getCheckoutWindowOptions,
@@ -29,13 +35,13 @@ import {
 export async function openExternalSafely(url: string): Promise<boolean> {
   const normalized = normalizeUrl(url);
   if (!isSafeForExternalOpen(normalized)) {
-    logger.warn(`Blocked external open: ${normalized}`);
+    logger.warn(`Blocked external open: ${urlForLog(normalized)}`);
     return false;
   }
 
   try {
-    await shell.openExternal(normalized);
-    logger.debug(`Opened externally: ${normalized}`);
+    await shell.openExternal(normalized, { activate: true });
+    logger.debug(`Opened externally: ${urlForLog(normalized)}`);
     return true;
   } catch (error) {
     logger.error('Failed to open external URL', error);
@@ -229,7 +235,12 @@ export function setupNavigationHandlers(
       }
       return {
         action: 'allow',
-        overrideBrowserWindowOptions: getPopupWindowOptions(),
+        overrideBrowserWindowOptions: {
+          ...getPopupWindowOptions(),
+          // Stay hidden until a real page loads. A Drive download never does,
+          // and the blank window is closed when the save dialog finishes.
+          show: false,
+        },
       };
     }
 
@@ -258,9 +269,36 @@ export function setupNavigationHandlers(
   });
 }
 
+const MAX_CURSOR_PROMPT_URL_LENGTH = 16_000;
+
+function isTrustedSender(contents: WebContents): boolean {
+  try {
+    return isPrimaryHost(new URL(contents.getURL()).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The web app asks for this after an async task move, when Chromium no longer
+ * treats the click as a user gesture and drops prompt-app navigations.
+ */
+export function setupExternalProtocolHandlers(): void {
+  ipcMain.handle(IPC_CHANNELS.openExternal, async (event, raw: unknown) => {
+    if (!isTrustedSender(event.sender)) return false;
+    if (typeof raw !== 'string') return false;
+    const url = raw.trim();
+    if (!url || url.length > MAX_CURSOR_PROMPT_URL_LENGTH) return false;
+    const parsed = parseUrl(url);
+    if (!parsed || !isPromptAppDeeplink(parsed)) return false;
+    return openExternalSafely(url);
+  });
+}
+
 export function setupExternalLinkHandlers(window: BrowserWindow): void {
   window.webContents.on('did-create-window', (childWindow, details) => {
     logger.debug(`Child window created: ${details.url}`);
     setupNavigationHandlers(childWindow.webContents, { isPopup: true });
+    markDownloadShell(childWindow);
   });
 }

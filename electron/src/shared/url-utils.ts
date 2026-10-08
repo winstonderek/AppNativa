@@ -55,6 +55,12 @@ export function classifyUrl(raw: string): UrlClassification {
     return 'deep-link';
   }
 
+  // Prompt deeplinks open in that coding app. Anything else on those
+  // schemes stays blocked, including vscode://file.
+  if (isPromptAppDeeplink(parsed)) {
+    return 'external-protocol';
+  }
+
   for (const ext of EXTERNAL_PROTOCOLS) {
     if (protocol === ext) {
       return 'external-protocol';
@@ -184,6 +190,37 @@ export function urlForLog(raw: string): string {
 export function isAllowedCheckoutNavigation(raw: string): boolean {
   const classification = classifyUrl(raw);
   return classification === 'stripe-checkout' || classification === 'external-web';
+}
+
+/**
+ * Prompt handoff into the coding apps people actually use next to Cursor.
+ * Each entry is one route that already asks the user to confirm before it runs.
+ * Query key is text (Cursor), prompt (VS Code, Windsurf, Devin) or q (Claude).
+ */
+const PROMPT_APP_ROUTES: ReadonlyArray<{ protocol: string; host: string; path: string }> = [
+  { protocol: 'cursor:', host: 'anysphere.cursor-deeplink', path: '/prompt' },
+  { protocol: 'vscode:', host: 'github.copilot-chat', path: '/chat' },
+  { protocol: 'vscode-insiders:', host: 'github.copilot-chat', path: '/chat' },
+  { protocol: 'claude:', host: 'code', path: '/new' },
+  { protocol: 'claude:', host: 'cowork', path: '/new' },
+  { protocol: 'claude:', host: 'claude.ai', path: '/new' },
+  { protocol: 'windsurf:', host: 'cascade', path: '/newchat' },
+  { protocol: 'windsurf-next:', host: 'cascade', path: '/newchat' },
+  { protocol: 'devin:', host: 'cascade', path: '/' },
+];
+
+const PROMPT_QUERY_KEYS = ['text', 'prompt', 'q'];
+
+/** True for a prompt deeplink such as cursor://…/prompt?text=… */
+export function isPromptAppDeeplink(parsed: URL): boolean {
+  const protocol = parsed.protocol.toLowerCase();
+  const host = parsed.hostname.toLowerCase();
+  const path = (parsed.pathname.replace(/\/+$/, '') || '/').toLowerCase();
+  const known = PROMPT_APP_ROUTES.some(
+    (route) => route.protocol === protocol && route.host === host && route.path === path,
+  );
+  if (!known) return false;
+  return PROMPT_QUERY_KEYS.some((key) => (parsed.searchParams.get(key) ?? '').trim().length > 0);
 }
 
 export function isSafeForExternalOpen(raw: string): boolean {

@@ -18,6 +18,7 @@ import {
 } from './desktop-notifications';
 import { setupDisplayMediaHandler } from './display-media';
 import { setupSessionDownloads } from './downloads';
+import { setupExternalProtocolHandlers } from './external-links';
 import { attachJsDialogOverrides, setupJsDialogHandlers } from './js-dialogs';
 import { logger } from './logger';
 import { setupPermissions } from './permissions';
@@ -64,6 +65,7 @@ if (handleSquirrelWindowsEvents()) {
       }
 
       setupDeepLinkHandlers();
+      setupExternalProtocolHandlers();
       setupPermissions();
       setupJsDialogHandlers();
       setupDisplayMediaHandler();
