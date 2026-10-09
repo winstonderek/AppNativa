@@ -13,6 +13,7 @@ import path from 'node:path';
 import { IPC_CHANNELS } from '../shared/constants';
 import { isPrimaryHost } from '../shared/url-utils';
 import { logger } from './logger';
+import { INDICATOR_TITLE, rememberGrantedSource } from './screen-share-indicator';
 
 export interface ScreenPickerSourceDTO {
   id: string;
@@ -81,6 +82,7 @@ function isInternalPickerSource(source: DesktopCapturerSource): boolean {
   const name = source.name;
   return (
     name === 'Share screen' ||
+    name === INDICATOR_TITLE ||
     name.startsWith('DevTools') ||
     name.includes('screen-picker')
   );
@@ -253,6 +255,7 @@ export function setupDisplayMediaHandler(): void {
           }
 
           logger.info(`Screen share granted: ${chosen.name}`);
+          rememberGrantedSource(chosen);
           respond({
             video: chosen,
             // System audio loopback is only supported on Windows.

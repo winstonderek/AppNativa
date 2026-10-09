@@ -25,6 +25,8 @@ const CHANNEL_JS_CONFIRM = 'pynn:js-confirm';
 const CHANNEL_JS_PROMPT_OPEN = 'pynn:js-prompt-open';
 const CHANNEL_JS_PROMPT_POLL = 'pynn:js-prompt-poll';
 const CHANNEL_OPEN_EXTERNAL = 'pynn:open-external';
+const CHANNEL_SCREEN_SHARE_STATE = 'pynn:screen-share-state';
+const CHANNEL_SCREEN_SHARE_STOP = 'pynn:screen-share-stop';
 
 const ARG_WINDOW_ROLE = '--pynn-window-role=';
 const ARG_APP_VERSION = '--pynn-app-version=';
@@ -379,5 +381,77 @@ function patchCursorPromptLaunch(): void {
 
 patchCursorPromptLaunch();
 process.once('loaded', patchCursorPromptLaunch);
+
+/**
+ * Electron has no browser "sharing your screen" bar, so the shell shows its own.
+ * Wrap getDisplayMedia to tell main when a capture starts and ends, and let the
+ * bar's Stop button end it. Ending fires `ended` so LiveKit unpublishes the share
+ * exactly as if the OS had stopped it.
+ */
+contextBridge.exposeInMainWorld('__pynnScreenShare', {
+  report: (sharing: boolean, surface: unknown) =>
+    ipcRenderer.send(CHANNEL_SCREEN_SHARE_STATE, { sharing: Boolean(sharing), surface }),
+});
+
+ipcRenderer.on(CHANNEL_SCREEN_SHARE_STOP, () => {
+  void webFrame.executeJavaScript('window.__pynnStopScreenShare && window.__pynnStopScreenShare()');
+});
+
+let screenSharePatchQueued = false;
+
+function patchScreenShareTracking(): void {
+  if (screenSharePatchQueued) return;
+  screenSharePatchQueued = true;
+  void webFrame.executeJavaScript(`
+    (() => {
+      const bridge = window.__pynnScreenShare;
+      const media = navigator.mediaDevices;
+      if (!bridge || !media || !media.getDisplayMedia || window.__pynnScreenSharePatched) return;
+      window.__pynnScreenSharePatched = true;
+      // Shared video track → its stream, so Stop also ends the system-audio track.
+      const live = new Map();
+      const report = () => {
+        const first = live.keys().next().value;
+        const surface = first && first.getSettings ? first.getSettings().displaySurface : undefined;
+        bridge.report(live.size > 0, surface);
+      };
+      const release = (track) => {
+        if (live.delete(track)) report();
+      };
+      const stop = MediaStreamTrack.prototype.stop;
+      MediaStreamTrack.prototype.stop = function () {
+        stop.call(this);
+        release(this);
+      };
+      const getDisplayMedia = media.getDisplayMedia.bind(media);
+      media.getDisplayMedia = async (...args) => {
+        const stream = await getDisplayMedia(...args);
+        for (const track of stream.getVideoTracks()) {
+          live.set(track, stream);
+          track.addEventListener('ended', () => release(track), { once: true });
+        }
+        report();
+        return stream;
+      };
+      window.__pynnStopScreenShare = () => {
+        const streams = Array.from(live.values());
+        live.clear();
+        for (const stream of streams) {
+          for (const track of stream.getTracks()) {
+            if (track.readyState === 'ended') continue;
+            stop.call(track);
+            track.dispatchEvent(new Event('ended'));
+          }
+        }
+        report();
+      };
+    })();
+  `).catch(() => {
+    screenSharePatchQueued = false;
+  });
+}
+
+patchScreenShareTracking();
+process.once('loaded', patchScreenShareTracking);
 
 export {};

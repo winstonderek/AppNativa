@@ -22,6 +22,7 @@ import { setupExternalProtocolHandlers } from './external-links';
 import { attachJsDialogOverrides, setupJsDialogHandlers } from './js-dialogs';
 import { logger } from './logger';
 import { setupPermissions } from './permissions';
+import { setupScreenShareIndicator } from './screen-share-indicator';
 import { handleSquirrelWindowsEvents } from './squirrel';
 import { setupTray } from './tray';
 import { handoffToUpdatedWindowsInstall, isInstallingUpdate, setupAutoUpdater } from './updater';
@@ -69,6 +70,7 @@ if (handleSquirrelWindowsEvents()) {
       setupPermissions();
       setupJsDialogHandlers();
       setupDisplayMediaHandler();
+      setupScreenShareIndicator();
       setupSessionDownloads();
       setupCallLayoutHandlers();
       setupDesktopNotificationHandlers();

@@ -81,6 +81,12 @@ export const IPC_CHANNELS = {
   screenPickerSources: 'pynn:screen-picker-sources',
   /** Screen picker → main: the chosen source id, or null if cancelled. */
   screenPickerResult: 'pynn:screen-picker-result',
+  /** Renderer → main: a page started or stopped sharing its screen. */
+  screenShareState: 'pynn:screen-share-state',
+  /** Main → renderer: stop every screen capture the page holds. */
+  screenShareStop: 'pynn:screen-share-stop',
+  /** Sharing indicator → main: 'stop' or 'hide'. */
+  screenShareIndicatorAction: 'pynn:screen-share-indicator-action',
   /** Renderer → main (sync): window.alert */
   jsAlert: 'pynn:js-alert',
   /** Renderer → main (sync): window.confirm */
