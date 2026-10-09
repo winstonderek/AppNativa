@@ -49,8 +49,9 @@ function installMacToolbarInset(): void {
   if (!Number.isFinite(height) || height <= 0) return;
 
   const px = `${height}px`;
-  const size = `calc(100vh - ${px})`;
-  const sizeDvh = `calc(100dvh - ${px})`;
+  const size = 'calc(100vh - var(--pynn-toolbar))';
+  const sizeDvh = 'calc(100dvh - var(--pynn-toolbar))';
+  const sizeSvh = 'calc(100svh - var(--pynn-toolbar))';
   const breakpoints = [
     { prefix: '', query: '' },
     { prefix: 'sm:', query: '@media (min-width: 640px)' },
@@ -66,9 +67,9 @@ function installMacToolbarInset(): void {
     { name: 'h-dvh', prop: 'height', value: sizeDvh },
     { name: 'min-h-dvh', prop: 'min-height', value: sizeDvh },
     { name: 'max-h-dvh', prop: 'max-height', value: sizeDvh },
-    { name: 'h-svh', prop: 'height', value: size },
-    { name: 'min-h-svh', prop: 'min-height', value: size },
-    { name: 'max-h-svh', prop: 'max-height', value: size },
+    { name: 'h-svh', prop: 'height', value: sizeSvh },
+    { name: 'min-h-svh', prop: 'min-height', value: sizeSvh },
+    { name: 'max-h-svh', prop: 'max-height', value: sizeSvh },
   ];
 
   const widgetTops = ['top-1', 'top-2', 'top-3', 'top-3.5', 'top-4']
@@ -88,7 +89,8 @@ function installMacToolbarInset(): void {
     return `${selectors.join(',\n')} {\n  top: ${px} !important;\n  bottom: 0 !important;\n  height: auto !important;\n}`;
   };
   const rules: string[] = [
-    `body { padding-top: ${px} !important; box-sizing: border-box !important; }`,
+    `:root { --pynn-toolbar: ${px}; }`,
+    `body { padding-top: var(--pynn-toolbar) !important; box-sizing: border-box !important; }`,
     widgetTops,
     fullBleed(''),
   ];
@@ -102,6 +104,57 @@ function installMacToolbarInset(): void {
   }
 
   webFrame.insertCSS(rules.join('\n'));
+  // Tailwind classes are covered above. Talks (and other pages) set 100vh/100dvh
+  // in CSS modules, which ignore those classes and then overflow past the window
+  // by exactly the toolbar padding.
+  void webFrame.executeJavaScript(`(() => {
+    const token = '--pynn-toolbar';
+    const patchValue = (value) => {
+      if (!value || value.includes(token) || !/100(?:d|s|l)?vh/.test(value)) return null;
+      return value.replace(/100(?:d|s|l)?vh/g, (unit) => 'calc(' + unit + ' - var(' + token + '))');
+    };
+    const visit = (rules) => {
+      for (let i = 0; i < rules.length; i++) {
+        const rule = rules[i];
+        if (rule.style) {
+          for (let p = 0; p < rule.style.length; p++) {
+            const prop = rule.style[p];
+            const next = patchValue(rule.style.getPropertyValue(prop));
+            if (next) rule.style.setProperty(prop, next, rule.style.getPropertyPriority(prop));
+          }
+        }
+        if (rule.cssRules) visit(rule.cssRules);
+      }
+    };
+    const patchAll = () => {
+      const sheets = [...document.styleSheets, ...(document.adoptedStyleSheets || [])];
+      for (const sheet of sheets) {
+        try { visit(sheet.cssRules); } catch { /* cross-origin sheet */ }
+      }
+    };
+    const watch = () => {
+      patchAll();
+      const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          for (const node of mutation.addedNodes) {
+            if (!node || node.nodeType !== 1) continue;
+            const tag = node.tagName;
+            if (tag === 'STYLE' || (tag === 'LINK' && node.rel === 'stylesheet') || (node.querySelector && node.querySelector('style, link[rel="stylesheet"]'))) {
+              patchAll();
+              return;
+            }
+          }
+        }
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      document.addEventListener('load', (event) => {
+        const target = event.target;
+        if (target && target.tagName === 'LINK' && target.rel === 'stylesheet') patchAll();
+      }, true);
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch, { once: true });
+    else watch();
+  })();`);
 }
 
 installMacToolbarInset();
