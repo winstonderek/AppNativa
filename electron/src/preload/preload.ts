@@ -108,51 +108,120 @@ function installMacToolbarInset(): void {
   webFrame.insertCSS(rules.join('\n'));
   // Tailwind classes are covered above. Talks (and other pages) set 100vh/100dvh
   // in CSS modules, which ignore those classes and then overflow past the window
-  // by exactly the toolbar padding.
+  // by exactly the toolbar padding. The same happens with inline styles, rules
+  // added through CSSOM (insertRule) and <style> tags whose text is replaced, so
+  // every one of those paths is rewritten too.
   void webFrame.executeJavaScript(`(() => {
+    if (window.__pynnToolbarInset) return;
+    window.__pynnToolbarInset = true;
     const token = '--pynn-toolbar';
+    const unitPattern = /(?<![\\d.])100(?:d|s|l)?vh/;
+    const unitPatternAll = /(?<![\\d.])100(?:d|s|l)?vh/g;
     const patchValue = (value) => {
-      if (!value || value.includes(token) || !/100(?:d|s|l)?vh/.test(value)) return null;
-      return value.replace(/100(?:d|s|l)?vh/g, (unit) => 'calc(' + unit + ' - var(' + token + '))');
+      if (!value || value.includes(token) || !unitPattern.test(value)) return null;
+      return value.replace(unitPatternAll, (unit) => 'calc(' + unit + ' - var(' + token + '))');
+    };
+    const patchStyle = (style) => {
+      if (!style) return;
+      for (let p = 0; p < style.length; p++) {
+        const prop = style[p];
+        const next = patchValue(style.getPropertyValue(prop));
+        if (next) style.setProperty(prop, next, style.getPropertyPriority(prop));
+      }
     };
     const visit = (rules) => {
+      if (!rules) return;
       for (let i = 0; i < rules.length; i++) {
         const rule = rules[i];
-        if (rule.style) {
-          for (let p = 0; p < rule.style.length; p++) {
-            const prop = rule.style[p];
-            const next = patchValue(rule.style.getPropertyValue(prop));
-            if (next) rule.style.setProperty(prop, next, rule.style.getPropertyPriority(prop));
-          }
-        }
+        if (rule.style) patchStyle(rule.style);
         if (rule.cssRules) visit(rule.cssRules);
       }
     };
+    const patchSheet = (sheet) => {
+      try { visit(sheet.cssRules); } catch { /* cross-origin or not loaded yet */ }
+    };
     const patchAll = () => {
-      const sheets = [...document.styleSheets, ...(document.adoptedStyleSheets || [])];
-      for (const sheet of sheets) {
-        try { visit(sheet.cssRules); } catch { /* cross-origin sheet */ }
-      }
+      for (const sheet of document.styleSheets) patchSheet(sheet);
+      for (const sheet of document.adoptedStyleSheets || []) patchSheet(sheet);
+    };
+    const patchInline = (element) => {
+      const attr = element.getAttribute && element.getAttribute('style');
+      if (attr && attr.includes('vh')) patchStyle(element.style);
+    };
+    const patchInlineTree = (root) => {
+      patchInline(root);
+      if (root.querySelectorAll) root.querySelectorAll('[style*="vh"]').forEach(patchInline);
+    };
+
+    // CSS-in-JS libraries add rules with insertRule after the <style> tag exists.
+    const proto = CSSStyleSheet.prototype;
+    const insertRule = proto.insertRule;
+    proto.insertRule = function (rule, index) {
+      const at = insertRule.apply(this, arguments);
+      try { visit([this.cssRules[at]]); } catch { /* ignore */ }
+      return at;
+    };
+    const replaceSync = proto.replaceSync;
+    if (replaceSync) {
+      proto.replaceSync = function () {
+        const result = replaceSync.apply(this, arguments);
+        patchSheet(this);
+        return result;
+      };
+    }
+    const replace = proto.replace;
+    if (replace) {
+      proto.replace = function () {
+        return replace.apply(this, arguments).then((sheet) => { patchSheet(sheet); return sheet; });
+      };
+    }
+
+    const isStyleNode = (node) => {
+      if (!node || node.nodeType !== 1) return false;
+      const tag = node.tagName;
+      return tag === 'STYLE' || (tag === 'LINK' && node.rel === 'stylesheet');
     };
     const watch = () => {
       patchAll();
+      patchInlineTree(document.documentElement);
+      let pending = false;
+      const schedulePatchAll = () => {
+        if (pending) return;
+        pending = true;
+        queueMicrotask(() => { pending = false; patchAll(); });
+      };
       const observer = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
+          if (mutation.type === 'attributes') {
+            patchInline(mutation.target);
+            continue;
+          }
+          const parent = mutation.target;
+          // Text of an existing <style> was replaced (styled-jsx, HMR, theme swaps).
+          if (parent && (parent.tagName === 'STYLE' || (parent.parentNode && parent.parentNode.tagName === 'STYLE'))) {
+            schedulePatchAll();
+            continue;
+          }
           for (const node of mutation.addedNodes) {
             if (!node || node.nodeType !== 1) continue;
-            const tag = node.tagName;
-            if (tag === 'STYLE' || (tag === 'LINK' && node.rel === 'stylesheet') || (node.querySelector && node.querySelector('style, link[rel="stylesheet"]'))) {
-              patchAll();
-              return;
+            if (isStyleNode(node) || (node.querySelector && node.querySelector('style, link[rel="stylesheet"]'))) {
+              schedulePatchAll();
             }
+            patchInlineTree(node);
           }
         }
       });
-      observer.observe(document.documentElement, { childList: true, subtree: true });
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['style'],
+      });
       document.addEventListener('load', (event) => {
-        const target = event.target;
-        if (target && target.tagName === 'LINK' && target.rel === 'stylesheet') patchAll();
+        if (isStyleNode(event.target)) schedulePatchAll();
       }, true);
+      window.addEventListener('load', schedulePatchAll, { once: true });
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch, { once: true });
     else watch();
