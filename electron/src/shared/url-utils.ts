@@ -91,11 +91,13 @@ const CALENDAR_OAUTH_START_PATHS = new Set([
   '/api/user-calendar/microsoft',
   '/api/mentor-calendar/google',
   '/api/mentor-calendar/microsoft',
+  '/api/mailbox/oauth/microsoft',
 ]);
 
 const CALENDAR_OAUTH_CALLBACK_PATHS = [
   '/api/mentor-calendar/google/callback',
   '/api/mentor-calendar/microsoft/callback',
+  '/api/mailbox/oauth/microsoft/callback',
 ];
 
 function normalizedPath(pathname: string): string {
@@ -104,8 +106,8 @@ function normalizedPath(pathname: string): string {
 }
 
 /**
- * Connect buttons on /agentic/calendar (and mentor bookings) are same-tab
- * links to these routes. They must leave the main window before the 302 to
+ * Connect buttons on /agentic/calendar (and mentor bookings) and "Connect with
+ * Microsoft" in agentic Mail are same-tab links to these routes. They must leave the main window before the 302 to
  * Google or Microsoft replaces it.
  */
 export function isCalendarOAuthStartUrl(raw: string): boolean {
