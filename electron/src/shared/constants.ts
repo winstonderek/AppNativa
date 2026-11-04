@@ -77,6 +77,8 @@ export const IPC_CHANNELS = {
   unreadCount: 'pynn:unread-count',
   /** Renderer → main: show a native OS notification when the app is in the background. */
   showNotification: 'pynn:show-notification',
+  /** Main → renderer: route to this in-app path (a clicked notification). */
+  navigate: 'pynn:navigate',
   /** Main → screen picker: the list of capturable screens and windows. */
   screenPickerSources: 'pynn:screen-picker-sources',
   /** Screen picker → main: the chosen source id, or null if cancelled. */

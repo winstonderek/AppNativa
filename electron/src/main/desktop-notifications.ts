@@ -5,6 +5,7 @@ import path from 'node:path';
 import { APP_NAME, IPC_CHANNELS, WINDOWS_SQUIRREL_APP_ID } from '../shared/constants';
 import { isAllowedMainNavigation, isPrimaryHost, resolveInAppNotificationUrl } from '../shared/url-utils';
 import { logger } from './logger';
+import { getTalksWindow } from './call-layout';
 import { focusMainWindow, getMainWindow } from './window';
 import { applyWindowsTaskbarBadge } from './windows-taskbar-badge';
 
@@ -290,21 +291,72 @@ export function applyWindowsNotificationIdentity(): void {
   ensureWindowsShortcuts(getWindowsAppUserModelId());
 }
 
+/** In-app path (pathname, query, hash) of a primary-host URL. */
+function inAppPath(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (!isPrimaryHost(parsed.hostname)) return null;
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+function isOnPrimaryHost(window: BrowserWindow): boolean {
+  return inAppPath(window.webContents.getURL()) !== null;
+}
+
+/** Chats links go to the Talks window when one is open; the rest to the main window. */
+function notificationWindow(path: string | null): BrowserWindow | null {
+  const talks = getTalksWindow();
+  if (talks && path?.startsWith('/agentic/chats')) return talks;
+  const main = getMainWindow();
+  return main && !main.isDestroyed() ? main : null;
+}
+
+/**
+ * Brings the right window forward, then asks the page to route to the link
+ * (preload `onNavigate`), so the open app is not reloaded. A window that is
+ * not on the Pynn host (a sign-in page) loads the URL instead.
+ */
 function focusAndNavigate(url: string | null): void {
-  const window = getMainWindow();
-  if (window && !window.isDestroyed()) {
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
-    if (url && isAllowedMainNavigation(url) && window.webContents.getURL() !== url) {
-      window.webContents.loadURL(url).catch((err) => {
-        logger.error('Failed to open notification URL', err);
-      });
-    }
+  const path = url ? inAppPath(url) : null;
+  const window = notificationWindow(path);
+  if (!window) {
+    focusMainWindow();
     return;
   }
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+  if (!url || !path || !isAllowedMainNavigation(url)) return;
 
-  focusMainWindow();
+  if (isOnPrimaryHost(window) && !window.webContents.isLoading()) {
+    window.webContents.send(IPC_CHANNELS.navigate, path);
+    return;
+  }
+  if (window.webContents.getURL() === url) return;
+  window.webContents.loadURL(url).catch((err) => {
+    logger.error('Failed to open notification URL', err);
+  });
+}
+
+/**
+ * Shown notifications are kept referenced: a collected Notification loses its
+ * click handler (Windows Action Center, macOS Notification Center).
+ */
+const MAX_LIVE_NOTIFICATIONS = 50;
+const liveNotifications = new Set<Notification>();
+
+function keepNotification(notification: Notification): () => void {
+  liveNotifications.add(notification);
+  if (liveNotifications.size > MAX_LIVE_NOTIFICATIONS) {
+    const oldest = liveNotifications.values().next().value;
+    if (oldest) liveNotifications.delete(oldest);
+  }
+  return () => {
+    liveNotifications.delete(notification);
+  };
 }
 
 function showNativeNotification(
@@ -331,11 +383,15 @@ function showNativeNotification(
     ...(icon ? { icon } : {}),
   });
 
+  const release = keepNotification(notification);
+
   notification.on('failed', (_event, error) => {
+    release();
     logger.error(`Native notification failed: ${error}`);
   });
 
   notification.on('click', () => {
+    release();
     focusAndNavigate(targetUrl);
   });
 

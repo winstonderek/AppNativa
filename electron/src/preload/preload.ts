@@ -20,6 +20,7 @@ const CHANNEL_CALLS_SUPPRESSED = 'pynn:calls-suppressed';
 const CHANNEL_TALKS_OPEN = 'pynn:talks-open';
 const CHANNEL_UNREAD_COUNT = 'pynn:unread-count';
 const CHANNEL_SHOW_NOTIFICATION = 'pynn:show-notification';
+const CHANNEL_NAVIGATE = 'pynn:navigate';
 const CHANNEL_JS_ALERT = 'pynn:js-alert';
 const CHANNEL_JS_CONFIRM = 'pynn:js-confirm';
 const CHANNEL_JS_PROMPT_OPEN = 'pynn:js-prompt-open';
@@ -297,6 +298,27 @@ ipcRenderer.on(CHANNEL_CALLS_SUPPRESSED, (_event, suppressed: boolean) => {
   }
 });
 
+const navigateListeners = new Set<(url: string) => void>();
+
+// A clicked notification: the page routes without a reload. Web builds (or
+// pages) that registered no listener get a plain navigation instead.
+ipcRenderer.on(CHANNEL_NAVIGATE, (_event, path: unknown) => {
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) {
+    return;
+  }
+  if (navigateListeners.size === 0) {
+    (globalThis as unknown as { location: { assign(url: string): void } }).location.assign(path);
+    return;
+  }
+  for (const listener of navigateListeners) {
+    try {
+      listener(path);
+    } catch {
+      // A failing web listener must not break the bridge.
+    }
+  }
+});
+
 /**
  * Minimal preload — remote web content must not access Node.js.
  * Only expose non-sensitive desktop metadata and the call-layout signals.
@@ -347,6 +369,18 @@ contextBridge.exposeInMainWorld('pynnDesktop', {
    * Pynn window is focused.
    */
   showNotification: (payload: unknown) => ipcRenderer.send(CHANNEL_SHOW_NOTIFICATION, payload),
+
+  /**
+   * Called with the in-app path of each notification the user clicks, after
+   * the shell focused this window. Without a listener the preload navigates.
+   */
+  onNavigate: (listener: (url: string) => void) => {
+    if (typeof listener !== 'function') return () => {};
+    navigateListeners.add(listener);
+    return () => {
+      navigateListeners.delete(listener);
+    };
+  },
 
   /** Open a prompt deeplink in a coding app. Main rejects anything else. */
   openExternal: (url: string) => ipcRenderer.invoke(CHANNEL_OPEN_EXTERNAL, url),

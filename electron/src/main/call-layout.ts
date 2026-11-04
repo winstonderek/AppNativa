@@ -281,6 +281,11 @@ export function setupCallLayoutHandlers(): void {
   logger.debug('Call layout handlers configured');
 }
 
+/** The Talks window, when one is open. */
+export function getTalksWindow(): BrowserWindow | null {
+  return talksWindow && !talksWindow.isDestroyed() ? talksWindow : null;
+}
+
 export function getActiveCallWindow(): BrowserWindow | null {
   return active?.callWindow ?? getMainWindow();
 }
