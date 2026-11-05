@@ -13,6 +13,14 @@ import { logger } from './logger';
 import { createAppWindow, getMainWindow, getWindowRole, loadAppUrl } from './window';
 
 export interface PendingCallSession {
+  /**
+   * "group" for a Chats channel call. The shell does not look at it: the web
+   * app in the call window reads it back through getPendingCall. Group calls
+   * send an empty callToken and role "receiver", plus `group` below.
+   */
+  kind?: 'call' | 'group';
+  /** Opaque to the shell; passed through to the call window untouched. */
+  group?: unknown;
   callId: string;
   callToken: string;
   roomName: string;
