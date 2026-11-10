@@ -76,7 +76,10 @@ function getPlatformWindowOptions(): Partial<Electron.BrowserWindowConstructorOp
   }
 
   return {
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1a1a1a' : '#ffffff',
+    backgroundColor: '#111111',
+    // Avoid the Windows startup frame that paints Electron's green splash
+    // before the real window exists.
+    paintWhenInitiallyHidden: false,
   };
 }
 

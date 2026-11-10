@@ -2,6 +2,8 @@ const path = require('node:path');
 const { signWindowsFile } = require('./scripts/windows-sign.cjs');
 
 const icon = path.join(__dirname, 'assets', 'icon.ico');
+const plainSidebar = path.join(__dirname, 'assets', 'nsis', 'installer-sidebar.bmp');
+const plainHeader = path.join(__dirname, 'assets', 'nsis', 'installer-header.bmp');
 
 /**
  * Assisted NSIS installer. electron-updater applies updates by re-running this
@@ -54,10 +56,15 @@ module.exports = {
     menuCategory: false,
     installerIcon: icon,
     uninstallerIcon: icon,
-    installerHeaderIcon: icon,
+    // Replace the stock NSIS sidebar and header (the framed tile graphic).
+    installerSidebar: plainSidebar,
+    uninstallerSidebar: plainSidebar,
+    installerHeader: plainHeader,
     installerLanguages: ['en_US'],
     displayLanguageSelector: false,
-    runAfterFinish: true,
+    // Don't launch the app while the wizard is still open. That startup
+    // paints Electron's green splash on top of the installer.
+    runAfterFinish: false,
     deleteAppDataOnUninstall: false,
     artifactName: 'Pynn-Setup.${ext}',
     guid: '6C8E4F20-9A1B-4D73-8E5F-2B7C0D1A4E93',
