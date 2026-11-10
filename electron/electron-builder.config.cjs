@@ -23,7 +23,13 @@ module.exports = {
   directories: {
     output: 'out/make/nsis',
   },
-  publish: null,
+  // A publish config makes electron-builder write latest.yml. The make script
+  // passes --publish never, so the build does not upload a release itself.
+  publish: {
+    provider: 'github',
+    owner: 'winstonderek',
+    repo: 'AppNativa',
+  },
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
     icon,
