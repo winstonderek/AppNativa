@@ -133,7 +133,6 @@ jobs:
       - name: Package Windows
         run: npm run make:win
         env:
-          SQUIRREL_ICON_URL: ${{ secrets.SQUIRREL_ICON_URL }}
           WINDOWS_CERTIFICATE_FILE: ${{ env.WINDOWS_CERTIFICATE_FILE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -237,7 +236,6 @@ jobs:
       - name: Package Windows
         run: npm run make:win
         env:
-          SQUIRREL_ICON_URL: ${{ secrets.SQUIRREL_ICON_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify Windows signatures
@@ -283,6 +281,5 @@ jobs:
             release-assets/**/*.dmg
             release-assets/**/*.zip
             release-assets/**/*.exe
-            release-assets/**/*.nupkg
             release-assets/**/*.yml
-            release-assets/**/RELEASES
+            release-assets/**/*.blockmap
