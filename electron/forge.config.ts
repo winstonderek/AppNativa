@@ -1,16 +1,16 @@
 import type { ForgeConfig } from '@electron-forge/shared-types';
-import { MakerSquirrel } from '@electron-forge/maker-squirrel';
+import type { SignToolOptions } from '@electron/windows-sign';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { MakerDMG } from '@electron-forge/maker-dmg';
 import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
 import { PublisherGithub } from '@electron-forge/publisher-github';
 import path from 'node:path';
 import { generateUpdateManifests } from './scripts/generate-update-manifests';
-import { azureWindowsSignOptions } from './windows-sign-options';
+import { azureWindowsSignOptions as readAzureWindowsSignOptions } from './scripts/windows-sign.cjs';
 
 const windowsCertificateFile = process.env.WINDOWS_CERTIFICATE_FILE;
 const windowsCertificatePassword = process.env.WINDOWS_CERTIFICATE_PASSWORD;
-const azureSign = azureWindowsSignOptions();
+const azureSign = readAzureWindowsSignOptions() as SignToolOptions | undefined;
 
 const pfxSign =
   !azureSign && windowsCertificateFile && windowsCertificatePassword
@@ -66,25 +66,8 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   makers: [
-    new MakerSquirrel({
-      // NuGet id → Start Menu AUMID `com.squirrel.Pynn.pynn` (must match WINDOWS_SQUIRREL_APP_ID).
-      name: 'Pynn',
-      setupExe: 'Pynn-Setup.exe',
-      setupIcon: path.resolve(__dirname, 'assets', 'icon.ico'),
-      // Squirrel downloads this into shortcuts (Start Menu / desktop / taskbar).
-      // Without it, pins go blank after an update when the old app-* folder is deleted.
-      iconUrl:
-        process.env.SQUIRREL_ICON_URL ||
-        'https://raw.githubusercontent.com/winstonderek/AppNativa/main/electron/assets/icon.ico',
-      ...(azureSign
-        ? { windowsSign: azureSign }
-        : windowsCertificateFile && windowsCertificatePassword
-          ? {
-              certificateFile: windowsCertificateFile,
-              certificatePassword: windowsCertificatePassword,
-            }
-          : {}),
-    }),
+    // The Windows setup is not a Forge maker. `npm run make:win` packages here,
+    // then electron-builder produces the NSIS installer (see electron-builder.config.cjs).
     new MakerZIP({}, ['darwin', 'win32']),
     new MakerDMG((arch) => ({
       name: arch === 'x64' ? 'intel-pynn' : 'Pynn',

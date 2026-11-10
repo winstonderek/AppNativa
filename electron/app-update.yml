@@ -2,3 +2,6 @@ provider: github
 owner: winstonderek
 repo: AppNativa
 updaterCacheDirName: pynn-updater
+# publisherName: the Authenticode certificate subject. When set, Windows
+# updates are rejected unless Pynn-Setup.exe was signed by that publisher.
+# The sha512 in latest.yml is still checked either way.

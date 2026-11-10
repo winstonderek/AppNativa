@@ -1,25 +1,17 @@
-import { spawn } from 'node:child_process';
-import fs from 'node:fs';
-import path from 'node:path';
-import { app, autoUpdater as squirrelUpdater, BrowserWindow, dialog, shell } from 'electron';
+import { app, BrowserWindow, dialog, shell } from 'electron';
 import { autoUpdater, type UpdateDownloadedEvent } from 'electron-updater';
-import {
-  APP_NAME,
-  GITHUB_UPDATE_OWNER,
-  GITHUB_UPDATE_REPO,
-  WINDOWS_SQUIRREL_EXE_NAME,
-  WINDOWS_SQUIRREL_PACKAGE_ID,
-} from '../shared/constants';
+import { APP_NAME, GITHUB_UPDATE_OWNER, GITHUB_UPDATE_REPO } from '../shared/constants';
 import { isNewerVersion } from '../shared/version';
 import { logger, isDevelopment } from './logger';
-import { isSquirrelInstall } from './squirrel';
 import { destroyTray } from './tray';
+import { isWindowsSetupInstall } from './windows-install';
 
 /**
- * Squirrel.Windows reads `<feed>/RELEASES` and then `<feed>/<name>-full.nupkg`.
- * GitHub redirects both to the assets of the latest published release.
+ * electron-updater reads `latest.yml` (Windows) or `latest-mac.yml` (macOS)
+ * from the latest GitHub Release. `app-update.yml` points it at this repo.
+ * On Windows the file lists the NSIS setup; a silent reinstall keeps the
+ * folder the user chose.
  */
-const WINDOWS_UPDATE_FEED_URL = `https://github.com/${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO}/releases/latest/download`;
 const RELEASES_PAGE_URL = `https://github.com/${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO}/releases/latest`;
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
@@ -36,7 +28,8 @@ export function isInstallingUpdate(): boolean {
 /**
  * quitAndInstall is a no-op on macOS if a tray is open, windows stay alive,
  * or the old process still holds the single-instance lock (the relaunched
- * app then exits immediately).
+ * app then exits immediately). On Windows the NSIS installer also needs the
+ * executable unlocked before it can replace the files.
  */
 function prepareAppToQuitForUpdate(): void {
   installingUpdate = true;
@@ -53,72 +46,9 @@ function prepareAppToQuitForUpdate(): void {
   }
 }
 
-function spawnDetached(exe: string, args: string[]): void {
-  const child = spawn(exe, args, {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
-  child.unref();
-}
-
-function newestInstalledVersion(root: string): string | null {
-  let newest: string | null = null;
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !/^app-/i.test(entry.name)) continue;
-    const version = entry.name.replace(/^app-/i, '');
-    if (!newest || isNewerVersion(version, newest)) newest = version;
-  }
-  return newest;
-}
-
-function squirrelInstallRoot(): string | null {
-  if (process.platform !== 'win32' || !app.isPackaged) return null;
-
-  if (isSquirrelInstall()) {
-    return path.resolve(path.dirname(process.execPath), '..');
-  }
-
-  const localAppData = process.env.LOCALAPPDATA;
-  if (!localAppData) return null;
-  const root = path.join(localAppData, WINDOWS_SQUIRREL_PACKAGE_ID);
-  return fs.existsSync(path.join(root, 'Update.exe')) ? root : null;
-}
-
-/**
- * Squirrel keeps every version in its own app-* folder. Shortcuts and the
- * portable zip keep launching the old folder, so the update prompt returns
- * even though the new build is already installed. Start the newest one instead.
- */
-export function handoffToUpdatedWindowsInstall(): boolean {
-  const root = squirrelInstallRoot();
-  if (!root) return false;
-
-  const newest = newestInstalledVersion(root);
-  if (!newest || !isNewerVersion(newest, app.getVersion())) return false;
-
-  const installedExe = path.join(root, `app-${newest}`, `${WINDOWS_SQUIRREL_EXE_NAME}.exe`);
-  const updateExe = path.join(root, 'Update.exe');
-  if (!fs.existsSync(installedExe) || !fs.existsSync(updateExe)) return false;
-
-  logger.info(`Opening installed ${APP_NAME} ${newest} instead of ${app.getVersion()}`);
-  spawnDetached(installedExe, []);
-  setImmediate(() => {
-    app.quit();
-  });
-  return true;
-}
-
-/** Only Squirrel installs can update in place; the portable zip cannot. */
+/** The portable zip has no uninstaller, so it cannot replace itself. */
 function canAutoUpdate(): boolean {
-  return process.platform !== 'win32' || isSquirrelInstall();
+  return process.platform !== 'win32' || isWindowsSetupInstall();
 }
 
 function installDownloadedUpdate(): void {
@@ -130,10 +60,8 @@ function installDownloadedUpdate(): void {
   setImmediate(() => {
     try {
       if (process.platform === 'win32') {
-        // Squirrel already unpacked the new app-* folder. This runs
-        // `Update.exe --processStartAndWait`, which starts that version
-        // once this process has exited.
-        squirrelUpdater.quitAndInstall();
+        // Silent NSIS install into the directory chosen at setup, then relaunch.
+        autoUpdater.quitAndInstall(true, true);
       } else {
         // quitAndInstall already asks ShipIt to replace the bundle, quit, and
         // relaunch. A following app.quit() or app.exit() kills the process
@@ -237,29 +165,10 @@ function handleUpdateError(error: Error): void {
   }
 }
 
-function setupWindowsUpdater(): void {
-  squirrelUpdater.setFeedURL({ url: WINDOWS_UPDATE_FEED_URL });
-
-  squirrelUpdater.on('checking-for-update', () => {
-    logger.info('Checking for updates…');
-  });
-
-  squirrelUpdater.on('update-available', () => {
-    logger.info('Update available (downloading)');
-  });
-
-  squirrelUpdater.on('update-not-available', handleUpdateNotAvailable);
-
-  squirrelUpdater.on('update-downloaded', (_event, _releaseNotes, releaseName) => {
-    handleUpdateDownloaded(releaseName || null);
-  });
-
-  squirrelUpdater.on('error', handleUpdateError);
-}
-
 function setupElectronUpdater(): void {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.disableWebInstaller = true;
   autoUpdater.logger = {
     info: (message) => logger.info(String(message)),
     warn: (message) => logger.warn(String(message)),
@@ -309,15 +218,6 @@ function checkForUpdates(): void {
   }
   checkInProgress = true;
 
-  if (process.platform === 'win32') {
-    try {
-      squirrelUpdater.checkForUpdates();
-    } catch (error) {
-      handleUpdateError(error instanceof Error ? error : new Error(String(error)));
-    }
-    return;
-  }
-
   autoUpdater.checkForUpdates().catch((err: Error) => {
     handleUpdateError(err);
   });
@@ -330,18 +230,14 @@ function initializeUpdater(): boolean {
   }
 
   if (!canAutoUpdate()) {
-    logger.info('Auto-updater skipped (not a Squirrel install)');
+    logger.info('Auto-updater skipped (portable Windows build)');
     return false;
   }
 
   if (initialized) return true;
 
   initialized = true;
-  if (process.platform === 'win32') {
-    setupWindowsUpdater();
-  } else {
-    setupElectronUpdater();
-  }
+  setupElectronUpdater();
   return true;
 }
 

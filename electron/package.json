@@ -21,9 +21,9 @@
     "package": "npm run build && electron-forge package",
     "make": "npm run build && electron-forge make",
     "make:mac:intel": "npm run build && electron-forge make --platform=darwin --arch=x64 --targets=dmg",
-    "make:win": "npm run build && electron-forge make --platform=win32 --arch=x64",
+    "make:win": "npm run build && node scripts/make-windows.js",
     "make:win:zip": "npm run build && electron-forge make --platform=win32 --arch=x64 --targets=@electron-forge/maker-zip",
-    "make:win:setup": "npm run build && electron-forge make --platform=win32 --arch=x64 --targets=@electron-forge/maker-squirrel",
+    "make:win:setup": "npm run build && node scripts/make-windows.js",
     "publish": "npm run build && electron-forge publish",
     "lint": "tsc --noEmit"
   },
@@ -36,7 +36,6 @@
   "devDependencies": {
     "@electron-forge/cli": "^7.7.0",
     "@electron-forge/maker-dmg": "^7.7.0",
-    "@electron-forge/maker-squirrel": "^7.7.0",
     "@electron-forge/maker-zip": "^7.7.0",
     "@electron-forge/plugin-auto-unpack-natives": "^7.7.0",
     "@electron-forge/publisher-github": "^7.7.0",
@@ -45,6 +44,7 @@
     "@types/node": "^22.13.4",
     "cross-env": "^7.0.3",
     "electron": "^34.2.0",
+    "electron-builder": "^26.18.0",
     "typescript": "^5.7.3"
   }
 }

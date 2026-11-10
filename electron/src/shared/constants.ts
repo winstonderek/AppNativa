@@ -6,18 +6,6 @@ export const PROTOCOL_SCHEME = 'pynn';
 export const GITHUB_UPDATE_OWNER = 'winstonderek';
 export const GITHUB_UPDATE_REPO = 'AppNativa';
 
-/**
- * Squirrel.Windows NuGet id — must match MakerSquirrel `name` in forge.config.ts.
- * Start Menu shortcuts get AppUserModelID `com.squirrel.{id}.{exe}`.
- */
-export const WINDOWS_SQUIRREL_PACKAGE_ID = 'Pynn';
-
-/** Packaged Windows executable — must match packagerConfig.executableName. */
-export const WINDOWS_SQUIRREL_EXE_NAME = 'pynn';
-
-/** AppUserModelID written on Squirrel shortcuts. Toast notifications fail if this mismatches. */
-export const WINDOWS_SQUIRREL_APP_ID = `com.squirrel.${WINDOWS_SQUIRREL_PACKAGE_ID}.${WINDOWS_SQUIRREL_EXE_NAME}`;
-
 /** Primary hostname — navigation in the main window stays on this domain and subdomains. */
 export const PRIMARY_HOST = 'app.pynn.ai';
 

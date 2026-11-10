@@ -42,63 +42,24 @@ function isMacUpdateArtifact(artifact: string): boolean {
   return artifact.endsWith('.zip');
 }
 
-function stripUtf8Bom(filePath: string): void {
-  const data = fs.readFileSync(filePath);
-  if (data.length < 3 || data[0] !== 0xef || data[1] !== 0xbb || data[2] !== 0xbf) return;
-  fs.writeFileSync(filePath, data.subarray(3));
-}
-
 /**
- * electron-winstaller writes RELEASES as UTF-8 with a BOM. Squirrel's checksum
- * parser can treat that prefix as part of the hash and refuse to settle on the
- * installed package.
- */
-function stripReleaseManifestBoms(
-  makeResults: ReadonlyArray<{ artifacts: readonly string[] }>,
-): void {
-  const seen = new Set<string>();
-  for (const result of makeResults) {
-    for (const artifact of result.artifacts) {
-      const candidates = [artifact, path.join(path.dirname(artifact), 'RELEASES')];
-      for (const candidate of candidates) {
-        if (path.basename(candidate) !== 'RELEASES' || seen.has(candidate)) continue;
-        if (!fs.existsSync(candidate)) continue;
-        seen.add(candidate);
-        stripUtf8Bom(candidate);
-      }
-    }
-  }
-}
-
-function isWinUpdateArtifact(artifact: string): boolean {
-  const name = path.basename(artifact).toLowerCase();
-  return name.endsWith('.exe') && !name.includes('uninstall');
-}
-
-/**
- * electron-updater reads latest-mac.yml / latest.yml from the GitHub Release.
- * Electron Forge does not generate those files — add them as extra artifacts.
+ * electron-updater reads latest-mac.yml from the GitHub Release.
+ * Electron Forge does not generate it — add it as an extra macOS artifact.
+ * Windows latest.yml is written by electron-builder next to Pynn-Setup.exe.
  */
 export const generateUpdateManifests: ForgeHookMap['postMake'] = async (
   _config,
   makeResults,
 ) => {
-  if (!makeResults.length) return makeResults;
+  if (!makeResults.length || makeResults[0].platform !== 'darwin') return makeResults;
 
   const version = makeResults[0].packageJSON.version;
   const releaseDate = new Date().toISOString();
-  const platform = makeResults[0].platform;
   const files: UpdateFile[] = [];
 
   for (const result of makeResults) {
     for (const artifact of result.artifacts) {
-      const include =
-        result.platform === 'darwin'
-          ? isMacUpdateArtifact(artifact)
-          : result.platform === 'win32'
-            ? isWinUpdateArtifact(artifact)
-            : false;
-      if (!include || !fs.existsSync(artifact)) continue;
+      if (!isMacUpdateArtifact(artifact) || !fs.existsSync(artifact)) continue;
 
       files.push({
         url: path.basename(artifact),
@@ -108,11 +69,9 @@ export const generateUpdateManifests: ForgeHookMap['postMake'] = async (
     }
   }
 
-  stripReleaseManifestBoms(makeResults);
-
   if (!files.length) return makeResults;
 
-  const manifestName = platform === 'darwin' ? 'latest-mac.yml' : 'latest.yml';
+  const manifestName = 'latest-mac.yml';
   const firstArtifact = makeResults[0].artifacts[0];
   const manifestDir = firstArtifact
     ? path.dirname(firstArtifact)
