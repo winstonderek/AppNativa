@@ -62,9 +62,9 @@ module.exports = {
     installerHeader: plainHeader,
     installerLanguages: ['en_US'],
     displayLanguageSelector: false,
-    // Don't launch the app while the wizard is still open. That startup
-    // paints Electron's green splash on top of the installer.
-    runAfterFinish: false,
+    // The finish page (Launch Pynn + Create a desktop shortcut, both ticked)
+    // comes from assets/nsis/installer.nsh. Launch hides the wizard first.
+    include: path.join(__dirname, 'assets', 'nsis', 'installer.nsh'),
     deleteAppDataOnUninstall: false,
     artifactName: 'Pynn-Setup.${ext}',
     guid: '6C8E4F20-9A1B-4D73-8E5F-2B7C0D1A4E93',
