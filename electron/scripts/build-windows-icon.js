@@ -176,16 +176,26 @@ function scaleBox(image, size) {
   return out;
 }
 
+/**
+ * A BMP icon image is the colour bitmap followed by a 1-bit AND mask, even at
+ * 32 bpp. Without the mask the Windows shell cannot load the icon, so the
+ * exe, shortcuts, taskbar and Installed apps all show a blank one.
+ */
 function bmpEntry(size, pixels) {
+  const maskStride = Math.ceil(size / 32) * 4;
+  const xorBytes = size * size * 4;
+  const maskBytes = maskStride * size;
+
   const header = Buffer.alloc(40);
   header.writeUInt32LE(40, 0);
   header.writeInt32LE(size, 4);
   header.writeInt32LE(size * 2, 8);
   header.writeUInt16LE(1, 12);
   header.writeUInt16LE(32, 14);
-  header.writeUInt32LE(size * size * 4, 20);
+  header.writeUInt32LE(xorBytes + maskBytes, 20);
 
-  const xor = Buffer.alloc(size * size * 4);
+  const xor = Buffer.alloc(xorBytes);
+  const mask = Buffer.alloc(maskBytes, 0);
   for (let y = 0; y < size; y += 1) {
     const srcY = size - 1 - y;
     for (let x = 0; x < size; x += 1) {
@@ -195,10 +205,13 @@ function bmpEntry(size, pixels) {
       xor[dst + 1] = pixels[src + 1];
       xor[dst + 2] = pixels[src];
       xor[dst + 3] = pixels[src + 3];
+      if (pixels[src + 3] === 0) {
+        mask[y * maskStride + (x >> 3)] |= 0x80 >> (x & 7);
+      }
     }
   }
 
-  return Buffer.concat([header, xor]);
+  return Buffer.concat([header, xor, mask]);
 }
 
 function writeIco(images) {

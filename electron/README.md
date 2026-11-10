@@ -111,10 +111,10 @@ Generate proper platform icons from your PNG using [icon-gen](https://www.npmjs.
 | `APPLE_TEAM_ID` | 10-character Apple Developer Team ID |
 | `APPLE_CERTIFICATE` | Base64 of the Developer ID Application `.p12` (CI) |
 | `APPLE_CERTIFICATE_PASSWORD` | Password of that `.p12` |
-| `WINDOWS_CERTIFICATE` | Base64 of an Authenticode `.pfx`, only if you are not using Azure Artifact Signing |
-| `WINDOWS_CERTIFICATE_FILE` | Path to that `.pfx` on disk (set automatically in CI) |
+| `WINDOWS_CERTIFICATE` | Not used by CI any more (Windows CI signs with Azure) |
+| `WINDOWS_CERTIFICATE_FILE` | Path to a `.pfx` for a signed local build |
 | `WINDOWS_CERTIFICATE_PASSWORD` | Password of that `.pfx` |
-| `AZURE_CLIENT_ID` | App registration used by GitHub to sign on tag builds |
+| `AZURE_CLIENT_ID` | App registration used by GitHub to sign Windows builds |
 | `AZURE_TENANT_ID` | Entra tenant of that app |
 | `AZURE_SUBSCRIPTION_ID` | Subscription that owns the Artifact Signing account |
 | `AZURE_CODESIGNING_ENDPOINT` | Regional endpoint, e.g. `https://weu.codesigning.azure.net` |
@@ -169,7 +169,7 @@ Add these as **GitHub Actions secrets** (repo → **Settings → Secrets and var
 
 ### Windows (Azure Artifact Signing)
 
-Tag builds (`v*`) sign `pynn.exe`, the DLLs inside the package, and `Pynn-Setup.exe` with Azure Artifact Signing. There is no `.pfx`: the private key stays in Azure. Branch and pull-request builds are not signed.
+Every CI build (tags, branch pushes, pull requests and **Run workflow**) signs `pynn.exe`, the DLLs inside the package, and `Pynn-Setup.exe` with Azure Artifact Signing, and fails if `Pynn-Setup.exe` does not have a valid signature. There is no `.pfx`: the private key stays in Azure.
 
 Do this once. Identity validation on the signing account must already be **Completed**, and the certificate profile must be **Public Trust**.
 
@@ -182,11 +182,9 @@ Do this once. Identity validation on the signing account must already be **Compl
 3. On the Artifact Signing account → **Access control**, give that app the role **Artifact Signing Certificate Profile Signer**.
 4. In GitHub → **Settings → Environments**, create an environment named `signing`. Do not add required reviewers, or the release will wait for a click.
 5. On that environment (not as repository secrets), add `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CODESIGNING_ENDPOINT`, `AZURE_CODESIGNING_ACCOUNT`, and `AZURE_CERTIFICATE_PROFILE`. The endpoint is the one shown on the account, for example `https://weu.codesigning.azure.net`.
-6. Push a version tag. The Windows job signs in with that app, and the build fails if `Pynn-Setup.exe` does not have a valid signature.
+6. Do not add deployment branch rules to `signing`; every branch build uses it. The Windows job signs in with that app, and the build fails if `Pynn-Setup.exe` does not have a valid signature.
 
-A `.pfx` still works for a local or CI build that is not a tag: set `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD`. A tag build ignores the `.pfx` and uses Azure.
-
-Signing is skipped when this environment is not used — branch builds still succeed for testing.
+A local `npm run make:win` is unsigned unless you set `WINDOWS_CERTIFICATE_FILE` and `WINDOWS_CERTIFICATE_PASSWORD` to a `.pfx`, or the Azure variables above.
 
 ## Auto-update
 
