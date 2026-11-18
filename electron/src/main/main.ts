@@ -34,6 +34,13 @@ import {
 
 applyWindowsAppUserModelId();
 
+// A local build pointed at another site (PYNN_APP_URL) keeps its own profile,
+// so it runs beside the installed app instead of hitting its single-instance
+// lock, and its cookies never mix with production's.
+if (process.env.PYNN_APP_URL) {
+  app.setPath('userData', `${app.getPath('userData')}-${new URL(process.env.PYNN_APP_URL).hostname}`);
+}
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {

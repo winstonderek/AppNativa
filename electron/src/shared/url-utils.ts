@@ -35,10 +35,30 @@ function isLocalDevHost(hostname: string): boolean {
   );
 }
 
+/** Hostname of PYNN_APP_URL when it is set (https only, or a local dev host). */
+function appUrlOverrideHost(): string | null {
+  const raw = process.env.PYNN_APP_URL;
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== 'https:' && !isLocalDevHost(host)) return null;
+    return host;
+  } catch {
+    return null;
+  }
+}
+
 /** True when the host is the primary Pynn web domain or a subdomain of it. */
 export function isPrimaryHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
   if (host === PRIMARY_HOST || host.endsWith(`.${PRIMARY_HOST}`)) {
+    return true;
+  }
+
+  // A local build pointed at a staging site with PYNN_APP_URL trusts exactly
+  // that host. Release builds never set the variable.
+  if (host === appUrlOverrideHost()) {
     return true;
   }
 
