@@ -280,9 +280,12 @@ export function createAppWindow(init: AppWindowInit = {}): BrowserWindow {
     logger.debug(`Page loaded: ${url}`);
   });
 
-  window.on('page-title-updated', (event) => {
+  window.on('page-title-updated', (event, pageTitle) => {
     event.preventDefault();
-    window.setTitle(windowTitle());
+    // A pop-out window is named after what it shows (the email's subject,
+    // the document's name), like a Mail or Office window.
+    const detail = role === 'content' ? pageTitle.trim() : '';
+    window.setTitle(detail ? windowTitle(detail) : windowTitle());
   });
 
   window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -341,21 +344,31 @@ function openAnotherWindow(): void {
   }
 
   const bounds = anchor.getNormalBounds();
-  const { workArea } = screen.getDisplayMatching(bounds);
-  let x = bounds.x + NEW_WINDOW_OFFSET;
-  let y = bounds.y + NEW_WINDOW_OFFSET;
-  const maxX = workArea.x + workArea.width - Math.min(bounds.width, workArea.width);
-  const maxY = workArea.y + workArea.height - Math.min(bounds.height, workArea.height);
+  createAppWindow({
+    role: 'main',
+    becomeMain: false,
+    bounds: cascadeBounds(anchor, bounds.width, bounds.height),
+  });
+}
+
+/**
+ * Bounds for a new window of `width` × `height`, offset down and right from
+ * `anchor` and kept inside that display's work area.
+ */
+export function cascadeBounds(anchor: BrowserWindow, width: number, height: number): Electron.Rectangle {
+  const anchorBounds = anchor.getNormalBounds();
+  const { workArea } = screen.getDisplayMatching(anchorBounds);
+  const w = Math.min(width, workArea.width);
+  const h = Math.min(height, workArea.height);
+  let x = anchorBounds.x + NEW_WINDOW_OFFSET;
+  let y = anchorBounds.y + NEW_WINDOW_OFFSET;
+  const maxX = workArea.x + workArea.width - w;
+  const maxY = workArea.y + workArea.height - h;
   if (x > maxX || y > maxY) {
     x = workArea.x + NEW_WINDOW_OFFSET;
     y = workArea.y + NEW_WINDOW_OFFSET;
   }
-
-  createAppWindow({
-    role: 'main',
-    becomeMain: false,
-    bounds: { x, y, width: bounds.width, height: bounds.height },
-  });
+  return { x: Math.min(x, maxX), y: Math.min(y, maxY), width: w, height: h };
 }
 
 export function loadAppUrl(window: BrowserWindow, url: string): void {
@@ -861,7 +874,10 @@ export function buildApplicationMenu(): void {
       submenu: [
         { role: 'minimize' },
         { role: 'zoom' },
-        ...(isMac ? [{ type: 'separator' as const }, { role: 'front' as const }] : [{ role: 'close' as const }]),
+        // Cmd+W closes a window on macOS too, e.g. a popped-out email.
+        ...(isMac
+          ? [{ role: 'close' as const }, { type: 'separator' as const }, { role: 'front' as const }]
+          : [{ role: 'close' as const }]),
       ],
     },
   ];

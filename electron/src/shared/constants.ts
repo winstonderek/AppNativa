@@ -26,7 +26,41 @@ export const MIN_TALKS_WINDOW_WIDTH = 480;
 export const MIN_TALKS_WINDOW_HEIGHT = 400;
 export const TALKS_PATH = '/agentic/talks';
 
-export type WindowRole = 'main' | 'workspace' | 'call' | 'talks' | 'popup' | 'checkout' | 'oauth';
+/**
+ * Chromeless pop-out windows (one email, the composer, a Drive document) load
+ * web routes under this prefix, with or without a locale in front.
+ */
+export const CONTENT_WINDOW_PATH = '/agentic/window/';
+
+export type ContentWindowKind = 'mail' | 'compose' | 'document' | 'event';
+
+/** Starting size per kind of content window; the window then cascades. */
+export const CONTENT_WINDOW_SIZES: Record<ContentWindowKind, { width: number; height: number }> = {
+  mail: { width: 960, height: 780 },
+  compose: { width: 820, height: 720 },
+  document: { width: 1280, height: 860 },
+  // The page then fits the height to the event (see contentWindowFit).
+  event: { width: 780, height: 640 },
+};
+
+/** Kinds that float at the right edge of the display instead of cascading. */
+export const RIGHT_FLOATING_CONTENT_WINDOWS: ReadonlySet<ContentWindowKind> = new Set(['event', 'compose']);
+/** Gap between a right-floating window and the work-area edge. */
+export const CONTENT_WINDOW_EDGE_MARGIN = 16;
+/** Shortest height a content window may fit itself to. */
+export const MIN_FIT_CONTENT_WINDOW_HEIGHT = 320;
+export const MIN_CONTENT_WINDOW_WIDTH = 520;
+export const MIN_CONTENT_WINDOW_HEIGHT = 420;
+
+export type WindowRole =
+  | 'main'
+  | 'workspace'
+  | 'call'
+  | 'talks'
+  | 'popup'
+  | 'checkout'
+  | 'oauth'
+  | 'content';
 
 /**
  * Hosted Stripe surfaces that should stay inside the desktop app instead of
@@ -89,6 +123,12 @@ export const IPC_CHANNELS = {
   jsPromptResult: 'pynn:js-prompt-result',
   /** Renderer → main: open a prompt deeplink in Cursor, VS Code, Claude, Windsurf or Devin. */
   openExternal: 'pynn:open-external',
+  /** Renderer → main: open an `/agentic/window/...` path in its own chromeless window. */
+  contentWindowOpen: 'pynn:content-window-open',
+  /** Content window → main: close this window (sent, archived, deleted, closed). */
+  windowClose: 'pynn:window-close',
+  /** Content window → main: fit this window's height to its content, in CSS px. */
+  contentWindowFit: 'pynn:content-window-fit',
 } as const;
 
 /**

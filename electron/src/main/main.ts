@@ -8,6 +8,7 @@ import {
 import { APP_ID, APP_NAME, PROTOCOL_SCHEME } from '../shared/constants';
 import { applyLaunchAtStartupSetting } from './auto-start';
 import { setupCallLayoutHandlers } from './call-layout';
+import { setupContentWindowHandlers } from './content-windows';
 import { consumePendingDeepLinks, handleDeepLink, setupDeepLinkHandlers } from './deep-links';
 import {
   applyWindowsAppUserModelId,
@@ -67,6 +68,7 @@ if (!gotSingleInstanceLock) {
     setupScreenShareIndicator();
     setupSessionDownloads();
     setupCallLayoutHandlers();
+    setupContentWindowHandlers();
     setupDesktopNotificationHandlers();
     registerDesktopNotifications();
     applyLaunchAtStartupSetting();

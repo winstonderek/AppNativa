@@ -28,6 +28,9 @@ const CHANNEL_JS_PROMPT_POLL = 'pynn:js-prompt-poll';
 const CHANNEL_OPEN_EXTERNAL = 'pynn:open-external';
 const CHANNEL_SCREEN_SHARE_STATE = 'pynn:screen-share-state';
 const CHANNEL_SCREEN_SHARE_STOP = 'pynn:screen-share-stop';
+const CHANNEL_CONTENT_WINDOW_OPEN = 'pynn:content-window-open';
+const CHANNEL_WINDOW_CLOSE = 'pynn:window-close';
+const CHANNEL_CONTENT_WINDOW_FIT = 'pynn:content-window-fit';
 
 const ARG_WINDOW_ROLE = '--pynn-window-role=';
 const ARG_APP_VERSION = '--pynn-app-version=';
@@ -384,6 +387,18 @@ contextBridge.exposeInMainWorld('pynnDesktop', {
 
   /** Open a prompt deeplink in a coding app. Main rejects anything else. */
   openExternal: (url: string) => ipcRenderer.invoke(CHANNEL_OPEN_EXTERNAL, url),
+
+  /**
+   * Open an `/agentic/window/...` path (one email, the composer, a Drive
+   * document) in its own chromeless window. Resolves to false if refused.
+   */
+  openContentWindow: (path: string) => ipcRenderer.invoke(CHANNEL_CONTENT_WINDOW_OPEN, path),
+
+  /** Close this window. Main only honours it in content windows. */
+  closeWindow: () => ipcRenderer.send(CHANNEL_WINDOW_CLOSE),
+
+  /** Content windows: fit this window's height to the page content (CSS px). */
+  fitContentWindow: (size: unknown) => ipcRenderer.send(CHANNEL_CONTENT_WINDOW_FIT, size),
 });
 
 // Consumed by the web app's isDesktopApp()/getDesktopAppInfo() helpers.

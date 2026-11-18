@@ -1,5 +1,7 @@
 import {
   APP_URL,
+  CONTENT_WINDOW_PATH,
+  type ContentWindowKind,
   EXTERNAL_PROTOCOLS,
   PRIMARY_HOST,
   PROTOCOL_SCHEME,
@@ -324,4 +326,43 @@ export function deepLinkToAppUrl(deepLink: string): string {
 export function normalizeUrl(raw: string): string {
   const parsed = parseUrl(raw);
   return parsed ? parsed.href : raw;
+}
+
+/**
+ * Resolves a content-window path (`/agentic/window/...`, optionally after a
+ * locale segment such as `/es`) to a URL on the primary host. Only relative
+ * paths are accepted. Returns null for anything else.
+ */
+export function resolveContentWindowUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (
+    !trimmed.startsWith('/') ||
+    trimmed.startsWith('//') ||
+    trimmed.includes('\\') ||
+    trimmed.length > 2048
+  ) {
+    return null;
+  }
+
+  const base = APP_URL.replace(/\/$/, '');
+  const resolved = parseUrl(`${base}${trimmed}`);
+  if (!resolved || !isPrimaryHost(resolved.hostname)) return null;
+
+  const path = resolved.pathname.replace(/^\/[a-z]{2}(?:-[A-Za-z]{2})?(?=\/)/, '');
+  if (!path.startsWith(CONTENT_WINDOW_PATH) || path.length <= CONTENT_WINDOW_PATH.length) {
+    return null;
+  }
+
+  return resolved.href;
+}
+
+/** Which kind of content window a resolved URL opens, for its starting size. */
+export function contentWindowKind(url: string): ContentWindowKind {
+  const parsed = parseUrl(url);
+  const path = parsed?.pathname ?? '';
+  if (path.includes(`${CONTENT_WINDOW_PATH}compose`)) return 'compose';
+  if (path.includes(`${CONTENT_WINDOW_PATH}drive/`)) return 'document';
+  if (path.includes(`${CONTENT_WINDOW_PATH}calendar/`)) return 'event';
+  return 'mail';
 }
