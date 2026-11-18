@@ -76,7 +76,8 @@ function getPlatformWindowOptions(): Partial<Electron.BrowserWindowConstructorOp
   }
 
   return {
-    backgroundColor: '#111111',
+    // White like the loading page, so nothing dark flashes before it.
+    backgroundColor: '#ffffff',
     // Avoid the Windows startup frame that paints Electron's green splash
     // before the real window exists.
     paintWhenInitiallyHidden: false,
