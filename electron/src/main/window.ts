@@ -586,12 +586,18 @@ function centeredOn(
  * OAuth cookies and the callback stay inside the app. macOS and Windows both
  * use a normal BrowserWindow; only the chrome (title bar, menu) differs.
  */
-export function openOAuthWindow(url: string): BrowserWindow | null {
+export function openOAuthWindow(
+  url: string,
+  options: { hidden?: boolean } = {},
+): BrowserWindow | null {
+  const { hidden = false } = options;
   if (oauthWindow && !oauthWindow.isDestroyed()) {
     prepareOAuthContents(oauthWindow.webContents);
     oauthWindow.loadURL(url).catch((err) => logger.error('OAuth window reload failed', err));
-    oauthWindow.show();
-    oauthWindow.focus();
+    if (!hidden) {
+      oauthWindow.show();
+      oauthWindow.focus();
+    }
     return oauthWindow;
   }
 
@@ -602,7 +608,17 @@ export function openOAuthWindow(url: string): BrowserWindow | null {
       ...centeredOn(parent, OAUTH_WINDOW_WIDTH, OAUTH_WINDOW_HEIGHT),
       parent,
       modal: false,
+      show: !hidden,
     });
+
+    if (hidden) {
+      // A hidden window is expected to hand off (to the browser or back to the
+      // main window) before anything loads. If a page does load instead, such
+      // as a server error, show it rather than leaving it invisible.
+      window.webContents.once('did-finish-load', () => {
+        if (!window.isDestroyed() && !window.isVisible()) window.show();
+      });
+    }
 
     if (process.platform !== 'darwin') {
       window.removeMenu();
@@ -660,7 +676,7 @@ function attachOAuthWindowHandlers(window: BrowserWindow): void {
   });
 }
 
-function closeOAuthWindows(): void {
+export function closeOAuthWindows(): void {
   const windows = new Set<BrowserWindow>();
   if (oauthWindow) windows.add(oauthWindow);
   for (const popup of popupWindows) {

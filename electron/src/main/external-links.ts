@@ -13,16 +13,20 @@ import {
   isAllowedMainNavigation,
   isAllowedPopupNavigation,
   isCalendarOAuthFlowUrl,
+  isGoogleCalendarConsentUrl,
+  isGoogleCalendarOAuthStartUrl,
   isPromptAppDeeplink,
   isPrimaryHost,
   isSafeForExternalOpen,
   normalizeUrl,
   parseUrl,
   urlForLog,
+  withDesktopOAuthClient,
 } from '../shared/url-utils';
 import { markDownloadShell } from './downloads';
 import { logger } from './logger';
 import {
+  closeOAuthWindows,
   getCheckoutWindowOptions,
   getOAuthWindowOptions,
   getPopupWindowOptions,
@@ -57,7 +61,30 @@ function openStripeCheckoutInApp(url: string): void {
   }
 }
 
+/**
+ * Google consent runs in the user's browser; the web app's callback brings the
+ * result back with a pynn:// link (see handleDeepLink).
+ */
+function openGoogleConsentInBrowser(url: string): void {
+  logger.info(`Opening Google calendar consent in the browser: ${urlForLog(url)}`);
+  setImmediate(closeOAuthWindows);
+  void openExternalSafely(url);
+}
+
 function openCalendarOAuthInApp(url: string, webContents: WebContents): void {
+  if (isGoogleCalendarConsentUrl(url)) {
+    openGoogleConsentInBrowser(url);
+    return;
+  }
+
+  // Google: run the Pynn start route in a hidden window that shares the app
+  // session (so its state cookie lands there), then send Google's consent
+  // page to the browser when the route redirects to it.
+  if (isGoogleCalendarOAuthStartUrl(url)) {
+    const opened = openOAuthWindow(withDesktopOAuthClient(url), { hidden: true });
+    if (opened) return;
+  }
+
   const opened = openOAuthWindow(url);
   if (opened) return;
   logger.warn(`Calendar sign-in window failed; continuing here: ${urlForLog(url)}`);
@@ -129,6 +156,12 @@ export function setupNavigationHandlers(
       return;
     }
 
+    if (isOAuth && isGoogleCalendarConsentUrl(url)) {
+      event.preventDefault();
+      openGoogleConsentInBrowser(url);
+      return;
+    }
+
     if (classification === 'external-web') {
       // Stay inside the sign-in window for every provider hop (Google account
       // chooser, login.live.com, etc.). Sending those to the system browser
@@ -160,6 +193,12 @@ export function setupNavigationHandlers(
   webContents.on('will-redirect', (event, url, _isInPlace, isMainFrame) => {
     if (isMainFrame === false) return;
     const classification = classifyUrl(url);
+
+    if (isOAuth && isGoogleCalendarConsentUrl(url)) {
+      event.preventDefault();
+      openGoogleConsentInBrowser(url);
+      return;
+    }
 
     if (classification === 'stripe-checkout' && !isCheckout) {
       event.preventDefault();
@@ -245,6 +284,10 @@ export function setupNavigationHandlers(
     }
 
     if (classification === 'external-web') {
+      if (isGoogleCalendarConsentUrl(url)) {
+        openGoogleConsentInBrowser(url);
+        return { action: 'deny' };
+      }
       if (isOAuth) {
         return {
           action: 'allow',

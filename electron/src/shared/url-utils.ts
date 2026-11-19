@@ -155,6 +155,41 @@ export function isCalendarOAuthProviderUrl(raw: string): boolean {
   return CALENDAR_OAUTH_CALLBACK_PATHS.includes(normalizedPath(callback.pathname));
 }
 
+const GOOGLE_CALENDAR_OAUTH_START_PATHS = new Set([
+  '/api/user-calendar/google',
+  '/api/mentor-calendar/google',
+]);
+
+/** Pynn route that starts a Google Calendar connection (302 to Google). */
+export function isGoogleCalendarOAuthStartUrl(raw: string): boolean {
+  if (!isCalendarOAuthStartUrl(raw)) return false;
+  const parsed = parseUrl(raw);
+  return !!parsed && GOOGLE_CALENDAR_OAUTH_START_PATHS.has(normalizedPath(parsed.pathname));
+}
+
+/**
+ * Tells the web app this flow runs from the desktop app, so its callback hands
+ * the result back through a pynn:// link instead of finishing in the browser.
+ */
+export function withDesktopOAuthClient(raw: string): string {
+  const parsed = parseUrl(raw);
+  if (!parsed) return raw;
+  parsed.searchParams.set('client', 'desktop');
+  return parsed.toString();
+}
+
+/**
+ * Google's consent page for a Pynn calendar connection. Google refuses
+ * sign-in in embedded windows ("This browser or app may not be secure"),
+ * so this must open in the user's own browser.
+ */
+export function isGoogleCalendarConsentUrl(raw: string): boolean {
+  const parsed = parseUrl(raw);
+  if (!parsed) return false;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
+  return host === 'accounts.google.com' && isCalendarOAuthProviderUrl(raw);
+}
+
 export function isCalendarOAuthFlowUrl(raw: string): boolean {
   return isCalendarOAuthStartUrl(raw) || isCalendarOAuthProviderUrl(raw);
 }
