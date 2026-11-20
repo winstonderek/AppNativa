@@ -266,13 +266,23 @@ export function createAppWindow(init: AppWindowInit = {}): BrowserWindow {
 
   window.webContents.setVisualZoomLevelLimits(1, 3);
 
-  window.once('ready-to-show', () => {
-    if (window.isDestroyed()) return;
+  let revealed = false;
+  const reveal = () => {
+    if (revealed || window.isDestroyed()) return;
+    revealed = true;
     window.show();
     if (isDevelopment()) {
       window.webContents.openDevTools({ mode: 'detach' });
     }
-  });
+  };
+  window.once('ready-to-show', reveal);
+  // On Windows the renderer starts without painting (paintWhenInitiallyHidden:
+  // false), and then Electron never emits ready-to-show. Show the window once
+  // the white loading page has loaded instead, or call, Talks and content
+  // windows stay hidden while their page (and a call's audio) keeps running.
+  if (process.platform !== 'darwin') {
+    window.webContents.once('did-finish-load', reveal);
+  }
 
   window.webContents.on('did-finish-load', () => {
     if (window.isDestroyed()) return;
