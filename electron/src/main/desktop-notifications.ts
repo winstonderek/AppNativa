@@ -5,6 +5,7 @@ import path from 'node:path';
 import { APP_ID, APP_NAME, IPC_CHANNELS } from '../shared/constants';
 import { isAllowedMainNavigation, isPrimaryHost, resolveInAppNotificationUrl } from '../shared/url-utils';
 import { logger } from './logger';
+import { UnreadNoticeCredits } from './unread-notice-credits';
 import { getTalksWindow } from './call-layout';
 import { focusMainWindow, getMainWindow } from './window';
 import { isWindowsSetupInstall } from './windows-install';
@@ -33,6 +34,7 @@ const prefs = new Store<NotificationPrefs>({
 });
 
 let lastUnreadCount: number | null = null;
+const unreadCredits = new UnreadNoticeCredits();
 
 function isTrustedSender(contents: Electron.WebContents): boolean {
   try {
@@ -352,7 +354,7 @@ export function registerDesktopNotifications(): void {
 }
 
 function notifyUnreadIncrease(previous: number, next: number): void {
-  const added = next - previous;
+  const added = unreadCredits.uncovered(next - previous, Date.now());
   if (added <= 0) return;
 
   showNativeNotification({
@@ -385,6 +387,9 @@ export function setupDesktopNotificationHandlers(): void {
     if (!isTrustedSender(event.sender)) return;
     const parsed = parsePayload(payload);
     if (!parsed) return;
+    // Counted even when focus hides it: the unread bump that follows is the
+    // same event and must not notify on its own.
+    unreadCredits.add(Date.now());
     showNativeNotification(parsed);
   });
 
